@@ -52,7 +52,7 @@ if __name__ == '__main__':
     generator_client.send('next')
 
     gray = None
-    num_successful = 0
+    i = 0
     try:
         while True:
             img = conn.recv()
@@ -67,11 +67,11 @@ if __name__ == '__main__':
                     objpoints.append(objp)
                     corners2 = cv2.cornerSubPix(gray, corners, (11, 11), (-1,-1), criteria)
                     imgpoints.append(corners2)
-                    num_successful += 1
+                    i += 1
                 else:
                     log('failed to find corners')
 
-                if num_successful >= 10: # TODO: finish conditions
+                if i >= 10: # TODO: finish conditions
                     break
 
                 generator_client.send('next')
@@ -112,13 +112,16 @@ if __name__ == '__main__':
     np.savetxt('output/camera_matrix.txt', mat)
     np.savetxt('output/distortion.txt', dist)
 
-    mean_error = 0
-    for num_successful in range(len(objpoints)):
-        imgpoints2, _ = cv2.projectPoints(objpoints[num_successful], rvecs[num_successful], tvecs[num_successful], mat, dist)
-        error = cv2.norm(imgpoints[num_successful], imgpoints2, cv2.NORM_L2) / len(imgpoints2)
-        mean_error += error
+    errors = []
+    for i in range(len(objpoints)):
+        imgpoints2, _ = cv2.projectPoints(objpoints[i], rvecs[i], tvecs[i], mat, dist)
+        errors.append(cv2.norm(imgpoints[i], imgpoints2, cv2.NORM_L2) / len(imgpoints2))
 
-    print("total error: {}".format(mean_error/len(objpoints)) )
+    mean_error = sum(errors) / len(objpoints)
+    print("total error: {}".format(mean_error))
+
+    np.savetxt('output/mean_error.txt', [mean_error])
+    np.savetxt('output/errors.txt', errors)
 
     # Undistort image
     h, w = img.shape[:2]
