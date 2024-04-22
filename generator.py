@@ -1,119 +1,131 @@
+from getopt import getopt
 from math import radians
 from multiprocessing.connection import Client, Listener
+from random import Random
 from screeninfo import get_monitors
-from math_helper import *
-import camera_driver
+from utils import *
 import cv2
 import numpy as np
 import os
-import random
+import sys
 
-address = ('localhost', 6001)
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
-MAX_ANGLE = 50
-
-def log(message):
-    print('[Generator] ' + message)
+CHECKERBOARD = cv2.imread( os.path.join(SCRIPT_DIR, 'board/checkerboard.png') )
+CHECKERBOARD = cv2.cvtColor(CHECKERBOARD, cv2.COLOR_RGB2RGBA)
 
 
-def load_checkerboard():
-    path = os.path.join(os.getcwd(), 'board/checkerboard.png')
-    checkerboard = cv2.imread(path)
-    checkerboard = cv2.cvtColor(checkerboard, cv2.COLOR_RGB2RGBA)
-    return checkerboard
-
-def init_window():
+def init_window(monitor):
     cv2.namedWindow('window', cv2.WND_PROP_FULLSCREEN)
+    cv2.moveWindow('window', -monitor.width, 0)
     cv2.setWindowProperty('window', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
 
-def validate_corners(image, monitor, mat):
-    """Validate the positions of the corners"""
-    corners = corner_positions(image, mat)
+class ImageGenerator():
+    MAX_ANGLE = 50
+    BACKGROUND_COLOR = (0, 255, 0, 255)
 
-    for corner in corners:
-        assert(0 <= corner[0] <= monitor.width)
-        assert(0 <= corner[1] <= monitor.height)
+    def __init__(self, monitor, distance_from_camera):
+        self.monitor = monitor
+        self.random = Random()
 
-
-def random_scale_and_offsets(image, monitor, mat):
-    """Generate random scale and offsets for the checkerboard"""
-    corners = corner_positions(image, mat)
-    (left, right, top, bottom) = bounds(corners)
-
-    # Random scale
-    (width, height) = (right - left, bottom - top)
-    max_scale = min(monitor.width / width, monitor.height / height)
-    scale = random.uniform(max_scale / 2, max_scale)
-
-    # Apply scale and recalculate bounds
-    corners = [(x * scale, y * scale) for (x, y) in corners]
-    (left, right, top, bottom) = bounds(corners)
-
-    # Random offsets
-    dx_min = int(-left)
-    dx_max = int(monitor.width - right)
-    dy_min = int(-top)
-    dy_max = int(monitor.height - bottom)
-
-    dx = random.uniform(dx_min, dx_max)
-    dy = random.uniform(dy_min, dy_max)   
-    return (scale, dx, dy)
+        pixels_per_meter = monitor.width / monitor.width_mm * 1000
+        self.z_dist = distance_from_camera * pixels_per_meter
 
 
-def transform_image(image, monitor): 
-    rx = random_angle(MAX_ANGLE)
-    ry = random_angle(MAX_ANGLE)
-    rz = random_angle(180)
+    def log(self, message):
+        print('[Generator] ' + message)
 
-    dz = np.sqrt(monitor.height**2 + monitor.width**2)
 
-    proj_3d = proj_matrix_3d(monitor)
-    rot     = rotation_matrix(rx, ry, rz)
-    trans   = translation_matrix_3d(0, 0, dz)
-    proj_2d = proj_matrix_2d(monitor, dz)
+    def next(self): 
+        """
+        Generates the next image.
+        """
+        rx = self.random_angle(ImageGenerator.MAX_ANGLE)
+        ry = self.random_angle(ImageGenerator.MAX_ANGLE)
+        rz = self.random_angle(180)
 
-    mat = proj_2d @ trans @ rot @ proj_3d
+        proj_3d = proj_matrix_3d(self.monitor)
+        rot     = rotation_matrix(rx, ry, rz)
+        trans   = translation_matrix_3d(0, 0, self.z_dist)
+        proj_2d = proj_matrix_2d(self.monitor, np.sqrt(self.monitor.height**2 + self.monitor.width**2))
 
-    (scale, dx, dy) = random_scale_and_offsets(image, monitor, mat)
-    mat = translation_matrix_2d(dx, dy) @ scale_matrix_2d(scale) @ mat
+        mat = proj_2d @ trans @ rot @ proj_3d
 
-    validate_corners(image, monitor, mat)
+        (dx, dy) = self.random_offsets(mat)
 
-    return cv2.warpPerspective(image.copy(), mat, (monitor.width, monitor.height), borderMode=cv2.BORDER_CONSTANT, borderValue=(128, 128, 128, 255))
+        mat = translation_matrix_2d(dx, dy) @ mat
+
+        image = cv2.warpPerspective(CHECKERBOARD.copy(), mat, (self.monitor.width, self.monitor.height), borderMode=cv2.BORDER_CONSTANT, borderValue=ImageGenerator.BACKGROUND_COLOR)
+        
+        return image
+
+
+    def random_angle(self, max_degrees):
+        """Generate random angle in range [-max_degrees, max_degrees]"""
+        degrees = self.random.uniform(-max_degrees, max_degrees)
+        return radians(degrees)
+
+
+    def random_offsets(self, mat):
+        """Generate random offsets for the checkerboard"""
+        corners = corner_positions(CHECKERBOARD, mat)
+        (left, right, top, bottom) = bounds(corners)
+
+        dx_min = int(-left)
+        dx_max = int(self.monitor.width - right)
+        dy_min = int(-top)
+        dy_max = int(self.monitor.height - bottom)
+
+        dx = self.random.uniform(dx_min, dx_max)
+        dy = self.random.uniform(dy_min, dy_max)   
+        return (dx, dy)
 
 
 if __name__ == '__main__':
-    log('started')
+    listener_port = None
+    client_port = None
 
-    listener = Listener(address, authkey=b'password')
+    opts, args = getopt(sys.argv[1:], '', ['listener-port=', 'client-port='])
+    for opt, arg in opts:
+        if opt == '--listener-port':
+            listener_port = int(arg)
+        elif opt == '--client-port':
+            client_port = int(arg)
+
+    assert listener_port is not None
+    assert client_port is not None
+
+    listener = Listener(('localhost', listener_port), authkey=b'password')
 
     monitor = get_monitors()[0]
+    gen = ImageGenerator(monitor, 1)
 
-    init_window()
-    checkerboard = load_checkerboard()
+    init_window(monitor)
 
     conn = listener.accept()
-    camera_client = Client(camera_driver.address, authkey=b'password')
-    log('connected to camera driver')
+    camera_client = Client(('localhost', client_port), authkey=b'password')
 
-    num_images = 0
     try:
         while True:
             msg = conn.recv()
             if msg == 'next':
-                log('received next message')
-                transformed_image = transform_image(checkerboard, monitor)
+                gen.log('received next message')
+                img = gen.next()
 
-                cv2.imshow('window', transformed_image)
-                cv2.waitKey(300) # TODO: wait until image is displayed
-
+                cv2.imshow('window', img)
+                cv2.waitKey(1000)
+                
                 camera_client.send('capture')
+            elif msg.startswith('change_seed '):
+                seed = int(msg[len('change_seed '):])
+                gen.log('changing seed to ' + str(seed))
+                gen.random.seed(seed)
             elif msg == 'exit':
-                log('received exit message')
+                gen.log('received exit message')
                 break
     except Exception as e:
-        log('error: ' + e.__class__.__name__)
+        gen.log('error: ' + e.__class__.__name__)
         print(e)
     finally:
         listener.close()

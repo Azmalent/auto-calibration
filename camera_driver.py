@@ -1,70 +1,64 @@
 from cv2 import VideoCapture
+from getopt import getopt
 from multiprocessing.connection import Client, Listener
-import calibrator
 import cv2
-import os
+import sys
 
-address = ('localhost', 6002)
+class CameraDriver():
+    def __init__(self):
+        self.cam = VideoCapture(0)
 
-def log(message):
-    print('[Camera driver] ' + message)
-
-
-def init_directory():
-    if os.path.isdir('captures'):
-        for file_name in os.listdir('captures'):
-            file = "captures/" + file_name
-            if os.path.isfile(file):
-                os.remove(file)
-    else:
-        os.mkdir('captures')
+    
+    def log(self, message):
+        print('[Camera Driver] ' + message)
 
 
-def save_image(image, num_captures):
-    filename = 'captures/capture' + str(num_captures) + '.png'
-    log('saving image as "' + filename + '"')
-    cv2.imwrite(filename, image)
+    def capture(self):
+        result, image = self.cam.read()
+        return result, image
 
 
 if __name__ == '__main__':
-    log('started')
+    listener_port = None
+    client_port = None
 
-    listener = Listener(address, authkey=b'password')
+    opts, args = getopt(sys.argv[1:], '', ['listener-port=', 'client-port='])
+    for opt, arg in opts:
+        if opt == '--listener-port':
+            listener_port = int(arg)
+        elif opt == '--client-port':
+            client_port = int(arg)
 
-    init_directory()
-    cam = VideoCapture(0)
+    listener = Listener(('localhost', listener_port), authkey=b'password')
+
+    driver = CameraDriver()
 
     conn = listener.accept()
-    calibrator_client = Client(calibrator.address, authkey=b'password')
-    log('connected to calibrator')
-
-    num_captures = 0
+    calibrator_client = Client(('localhost', client_port), authkey=b'password')
+    
     try:
         while True:
             msg = conn.recv()
             if msg == 'capture':
-                log('received capture message')
+                driver.log('received capture message')
 
-                result, image = cam.read()
-                if result:
-                    save_image(image, num_captures)
-                    num_captures += 1
-
-                    calibrator_client.send(image)
-                else:
-                    raise RuntimeError('Failed to capture image')
+                result = False
+                while not result:
+                    result, image = driver.capture()
+                    if result:
+                        calibrator_client.send(image)
             elif msg == 'exit':
-                log('received exit message')
+                driver.log('received exit message')
                 break
             else:
-                log('error')
+                driver.log('error')
                 raise ValueError('Unknown message "' + msg + '"')
     except Exception as e:
-        log('error: ' + e.__class__.__name__)
+        driver.log('error: ' + e.__class__.__name__)
         print(e)
     finally:
         listener.close()
         conn.close()
         calibrator_client.close()
 
-        cam.release()
+        driver.cam.release()

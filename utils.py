@@ -1,16 +1,32 @@
-from math import radians
+from contextlib import closing
 import numpy as np
-import random
+import os
+import socket
+
+def init_dir(dir):
+    """
+    Initializes a directory by removing all files within it if it already exists, or creating it if it doesn't.
+    """
+    if os.path.isdir(dir):
+        for file_name in os.listdir(dir):
+            file = dir + "/" + file_name
+            if os.path.isfile(file):
+                os.remove(file)
+    else:
+        os.mkdir(dir)
+
+
+def find_free_port():
+    """Find a free port on localhost"""
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(('', 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
+
 
 def normalize(p):
     """Normalize a point in homogeneous coordinates"""
     return p[:-1] / p[-1]
-
-
-def random_angle(max_degrees):
-    """Geneterate random angle in range [-max_degrees, max_degrees]"""
-    degrees = random.uniform(-max_degrees, max_degrees)
-    return radians(degrees)
 
 
 def corner_positions(image, mat):
@@ -73,10 +89,3 @@ def translation_matrix_3d(dx, dy, dz):
                         [0, 1, 0, dy],
                         [0, 0, 1, dz],
                         [0, 0, 0, 1]])
-
-
-def scale_matrix_2d(scale):
-    """2D scale matrix"""
-    return np.array([   [scale, 0, 0],
-                        [0, scale, 0],
-                        [0, 0, 1]])

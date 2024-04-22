@@ -1,78 +1,177 @@
+from generator import ImageGenerator
 from multiprocessing.connection import Client, Listener
-import camera_driver
-import generator
-import os
+from screeninfo import get_monitors
+from utils import find_free_port, init_dir
 import cv2
 import numpy as np
+import os
 import subprocess
 
-address = ('localhost', 6000)
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
 BOARD_SIZE = (8, 6)
 BOARD_WIDTH, BOARD_HEIGHT = BOARD_SIZE
 BOARD_AREA = BOARD_WIDTH * BOARD_HEIGHT
 
-# termination criteria
-criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+class LensCalibrator():
+    def __init__(self):
+        self.criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+
+        # prepare object points, like (0,0,0), (1,0,0), (2,0,0) ....,(6,5,0)
+        self.objp = np.zeros((BOARD_AREA, 3), np.float32)
+        self.objp[:,:2] = np.mgrid[0:BOARD_WIDTH, 0:BOARD_HEIGHT].T.reshape(-1,2)
+
+        self.objpoints = [] # 3d point in real world space
+        self.imgpoints = [] # 2d points in image plane
+
+        self.num_captures = 0
+        self.gray = None
 
 
-def log(message):
-    print('[Calibrator] ' + message)
+    def log(self, message):
+        print('[Lens Calibrator] ' + message)
+    
+
+    def accept_image(self, img):
+        self.log('received image')
+        self.gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        success, corners = cv2.findChessboardCorners(self.gray, BOARD_SIZE, None)
+
+        if success:
+            self.log('found corners')
+            cv2.imwrite('captures/lens/capture' + str(self.num_captures) + '.png', img)
+        
+            self.objpoints.append(self.objp)
+            corners2 = cv2.cornerSubPix(self.gray, corners, (11, 11), (-1,-1), self.criteria)
+            self.imgpoints.append(corners2)
+            self.num_captures += 1
+        else:
+            self.log('failed to find corners')
 
 
-# TODO: command line args
-# opts, args = getopt(sys.argv, 'n:w:', ['wait='])
-# for opt, arg in opts:
-#     if opt == '-n':
-#         num_frames = arg
-#     elif opt in ('-w', '--wait'):
-#         wait_interval = arg
+    def is_done(self):
+        return self.num_captures >= 10
+    
+
+    def calibrate_lens(self):
+        img = cv2.imread('captures/lens/capture0.png')
+
+        _, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(self.objpoints, self.imgpoints, self.gray.shape[::-1], None, None)
+        np.savetxt('output/camera_matrix.txt', mtx)
+        np.savetxt('output/distortion.txt', dist)
+        
+        errors = []
+        for i in range(len(self.objpoints)):
+            imgpoints2, _ = cv2.projectPoints(self.objpoints[i], rvecs[i], tvecs[i], mtx, dist)
+            errors.append(cv2.norm(self.imgpoints[i], imgpoints2, cv2.NORM_L2) / len(imgpoints2))
+
+        mean_error = sum(errors) / len(self.objpoints)
+        print("total error: {}".format(mean_error))
+
+        np.savetxt('output/mean_error.txt', [mean_error])
+        np.savetxt('output/errors.txt', errors)
+
+        # Undistort image
+        h, w = img.shape[:2]
+        new_mtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
+
+        undistorted = cv2.undistort(img, mtx, dist, None, new_mtx)
+
+        # crop the image
+        x, y, w, h = roi
+        undistorted = undistorted[y:y+h, x:x+w]
+        cv2.imwrite('output/result.png', undistorted)
+
+        return (mtx, new_mtx, dist)
+
+
+class NodalOffsetCalibrator:
+    def __init__(self, mtx, new_mtx, distortion, cam_dist):
+        self.matrix = mtx
+        self.new_matrix = new_mtx
+        self.distortion = distortion
+        self.camera_dist = cam_dist
+        self.nodal_offset = (0, 0, 0)
+
+        monitor = get_monitors()[0]
+        self.gen = ImageGenerator(monitor, cam_dist+1)
+
+        self.num_captures = 0
+
+
+    def log(self, message):
+        print('[Nodal Offset Calibrator] ' + message)
+
+
+    def accept_image(self, img):
+        self.log('received image')
+
+        img = cv2.undistort(img, self.matrix, self.distortion, None, self.new_matrix)
+        cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '.png', img)
+        
+        img2 = self.gen.next()
+        cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_virtual.png', img2)
+
+        self.num_captures += 1
+
+
+    def is_done(self):
+        return self.num_captures >= 10
+
 
 if __name__ == '__main__':
-    log('started')
+    print('Enter distance from camera to screen in meters: ', end='')
+    cam_distance = float( input() )
 
-    listener = Listener(address, authkey=b'password')
+    init_dir('captures')
+    init_dir('captures/lens')
+    init_dir('captures/nodal_offset')
+    init_dir('output')
 
-    subprocess.Popen(['python', 'generator.py']) 
-    subprocess.Popen(['python', 'camera_driver.py'])
+    CALIBRATOR_PORT = find_free_port()
+    GENERATOR_PORT = find_free_port()
+    CAMERA_DRIVER_PORT = find_free_port()
+
+    print('Calibrator port: ' + str(CALIBRATOR_PORT))
+    print('Generator port: ' + str(GENERATOR_PORT))
+    print('Camera driver port: ' + str(CAMERA_DRIVER_PORT))
+
+    calibrator = LensCalibrator()
+    listener = Listener(('localhost', CALIBRATOR_PORT), authkey=b'password')
     
-    # prepare object points, like (0,0,0), (1,0,0), (2,0,0) ....,(6,5,0)
-    objp = np.zeros((BOARD_AREA, 3), np.float32)
-    objp[:,:2] = np.mgrid[0:BOARD_WIDTH, 0:BOARD_HEIGHT].T.reshape(-1,2)
-
-    # Arrays to store object points and image points from all the images.
-    objpoints = [] # 3d point in real world space
-    imgpoints = [] # 2d points in image plane.
-
-    generator_client = Client(generator.address, authkey=b'password')
-    log('connected to generator')
+    subprocess.Popen(['python', os.path.join(SCRIPT_DIR, 'generator.py'), 
+        '--listener-port', str(GENERATOR_PORT), 
+        '--client-port', str(CAMERA_DRIVER_PORT)]) 
+    
+    subprocess.Popen(['python', os.path.join(SCRIPT_DIR, 'camera_driver.py'),
+        '--listener-port', str(CAMERA_DRIVER_PORT),
+        '--client-port', str(CALIBRATOR_PORT)])
+    
+    generator_client = Client(('localhost', GENERATOR_PORT), authkey=b'password')
+    calibrator.log('connected to generator')
 
     conn = listener.accept()
 
     generator_client.send('next')
 
-    gray = None
-    i = 0
     try:
         while True:
             img = conn.recv()
             if img is not None:
-                log('received image')
+                calibrator.accept_image(img)
 
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                success, corners = cv2.findChessboardCorners(gray, BOARD_SIZE, None)
+                if calibrator.is_done():
+                    calibrator.log('calibration complete!')
 
-                if success:
-                    log('found corners')
-                    objpoints.append(objp)
-                    corners2 = cv2.cornerSubPix(gray, corners, (11, 11), (-1,-1), criteria)
-                    imgpoints.append(corners2)
-                    i += 1
-                else:
-                    log('failed to find corners')
+                    if type(calibrator) == LensCalibrator:
+                        (mtx, new_mtx, dist) = calibrator.calibrate_lens()
+                        calibrator = NodalOffsetCalibrator(mtx, new_mtx, dist, cam_distance)
 
-                if i >= 10: # TODO: finish conditions
-                    break
+                        seed = os.getpid()
+                        calibrator.gen.random.seed(seed)
+                        generator_client.send('change_seed ' + str(seed))
+                    else:
+                        break
 
                 generator_client.send('next')
     finally:
@@ -81,55 +180,3 @@ if __name__ == '__main__':
 
         generator_client.send('exit')
         generator_client.close()
-
-    if not os.path.isdir('output'):
-        os.mkdir('output')
-        
-    # images = glob.glob('captures/*.png')
-    # images.sort(key=lambda x: float(re.findall("(\d+)",x)[0]))
-
-    # for fname in images:
-    #     img = cv2.imread(fname)
-    #     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    #     cv2.imshow('capture', gray)
-    #     cv2.waitKey(500)
-        
-
-    #     if success:
-    #         objpoints.append(objp)
-    #         corners2 = cv2.cornerSubPix(gray,corners, (11, 11), (-1,-1), criteria)
-    #         imgpoints.append(corners2)
-            
-    #         cv2.drawChessboardCorners(img, BOARD_SIZE, corners2, success)
-    #         cv2.imshow('capture', img)
-    #         cv2.waitKey(500)
-
-
-    
-    img = cv2.imread('captures/capture0.png')
-
-    ret, mat, dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
-    np.savetxt('output/camera_matrix.txt', mat)
-    np.savetxt('output/distortion.txt', dist)
-
-    errors = []
-    for i in range(len(objpoints)):
-        imgpoints2, _ = cv2.projectPoints(objpoints[i], rvecs[i], tvecs[i], mat, dist)
-        errors.append(cv2.norm(imgpoints[i], imgpoints2, cv2.NORM_L2) / len(imgpoints2))
-
-    mean_error = sum(errors) / len(objpoints)
-    print("total error: {}".format(mean_error))
-
-    np.savetxt('output/mean_error.txt', [mean_error])
-    np.savetxt('output/errors.txt', errors)
-
-    # Undistort image
-    h, w = img.shape[:2]
-    newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mat, dist, (w,h), 1, (w,h))
-
-    dst = cv2.undistort(img, mat, dist, None, newcameramtx)
-
-    # crop the image
-    x, y, w, h = roi
-    dst = dst[y:y+h, x:x+w]
-    cv2.imwrite('output/result.png', dst)
