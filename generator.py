@@ -25,19 +25,19 @@ class ImageGenerator():
     MAX_ANGLE = 50
     BACKGROUND_COLOR = (0, 255, 0, 255)
 
-    def __init__(self, monitor, distance_from_camera):
+    def __init__(self, monitor, mm_from_camera = 1000):
         self.monitor = monitor
         self.random = Random()
 
-        pixels_per_meter = monitor.width / monitor.width_mm * 1000
-        self.z_dist = distance_from_camera * pixels_per_meter
+        pixels_per_mm = monitor.width / monitor.width_mm
+        self.z_dist = mm_from_camera * pixels_per_mm
 
 
     def log(self, message):
         print('[Generator] ' + message)
 
 
-    def next(self): 
+    def next(self, nodal_offset = None): 
         """
         Generates the next image.
         """
@@ -46,15 +46,21 @@ class ImageGenerator():
         rz = self.random_angle(180)
 
         proj_3d = proj_matrix_3d(self.monitor)
-        rot     = rotation_matrix(rx, ry, rz)
+        proj_2d = proj_matrix_2d(self.monitor)
+        
         trans   = translation_matrix_3d(0, 0, self.z_dist)
-        proj_2d = proj_matrix_2d(self.monitor, np.sqrt(self.monitor.height**2 + self.monitor.width**2))
+        rot     = rotation_matrix(rx, ry, rz)
+
+        if nodal_offset is not None:
+            (r, t) = nodal_offset
+            rot = r @ rot
+            trans = r @ trans + t
 
         mat = proj_2d @ trans @ rot @ proj_3d
 
-        (dx, dy) = self.random_offsets(mat)
-
-        mat = translation_matrix_2d(dx, dy) @ mat
+        if nodal_offset is None:
+            (dx, dy) = self.random_offsets(mat)
+            mat = translation_matrix_2d(dx, dy) @ mat
 
         image = cv2.warpPerspective(CHECKERBOARD.copy(), mat, (self.monitor.width, self.monitor.height), borderMode=cv2.BORDER_CONSTANT, borderValue=ImageGenerator.BACKGROUND_COLOR)
         
@@ -99,7 +105,7 @@ if __name__ == '__main__':
     listener = Listener(('localhost', listener_port), authkey=b'password')
 
     monitor = get_monitors()[0]
-    gen = ImageGenerator(monitor, 1)
+    gen = ImageGenerator(monitor)
 
     init_window(monitor)
 
@@ -109,21 +115,22 @@ if __name__ == '__main__':
     try:
         while True:
             msg = conn.recv()
-            if msg == 'next':
-                gen.log('received next message')
-                img = gen.next()
+            if msg is not None:
+                command, args = msg[0], msg[1:]
+                if command == 'next':
+                    img = gen.next()
 
-                cv2.imshow('window', img)
-                cv2.waitKey(1000)
-                
-                camera_client.send('capture')
-            elif msg.startswith('change_seed '):
-                seed = int(msg[len('change_seed '):])
-                gen.log('changing seed to ' + str(seed))
-                gen.random.seed(seed)
-            elif msg == 'exit':
-                gen.log('received exit message')
-                break
+                    cv2.imshow('window', img)
+                    cv2.waitKey(300)
+                    
+                    camera_client.send('capture')
+                elif command == 'set_seed':
+                    gen.random.seed(args[0])
+                elif command == 'set_nodal_offset':
+                    pass #TODO
+                elif command == 'exit':
+                    gen.log('received exit message')
+                    break
     except Exception as e:
         gen.log('error: ' + e.__class__.__name__)
         print(e)

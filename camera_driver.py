@@ -7,6 +7,8 @@ import sys
 class CameraDriver():
     def __init__(self):
         self.cam = VideoCapture(0)
+        self.cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1920) 
+        self.cam.set(cv2.CAP_PROP_FRAME_HEIGHT,1080) 
 
     
     def log(self, message):
@@ -16,6 +18,9 @@ class CameraDriver():
     def capture(self):
         result, image = self.cam.read()
         return result, image
+
+    def __del__(self):
+        self.cam.release()
 
 
 if __name__ == '__main__':
@@ -40,8 +45,6 @@ if __name__ == '__main__':
         while True:
             msg = conn.recv()
             if msg == 'capture':
-                driver.log('received capture message')
-
                 result = False
                 while not result:
                     result, image = driver.capture()
@@ -60,5 +63,3 @@ if __name__ == '__main__':
         listener.close()
         conn.close()
         calibrator_client.close()
-
-        driver.cam.release()

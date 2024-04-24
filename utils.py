@@ -49,10 +49,11 @@ def proj_matrix_3d(monitor):
                         [0, 0, 1]])
 
 
-def proj_matrix_2d(monitor, dz):
+def proj_matrix_2d(monitor):
     """3D -> 2D projection matrix"""
-    return np.array([   [dz, 0, monitor.width/2, 0],
-                        [0, dz, monitor.height/2, 0],
+    f = np.sqrt(monitor.height**2 + monitor.width**2)
+    return np.array([   [f, 0, monitor.width/2, 0],
+                        [0, f, monitor.height/2, 0],
                         [0, 0, 1, 0]])
 
 
