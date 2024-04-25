@@ -49,12 +49,11 @@ def proj_matrix_3d(monitor):
                         [0, 0, 1]])
 
 
-def proj_matrix_2d(monitor):
+def proj_matrix_2d(fx, fy, cx, cy):
     """3D -> 2D projection matrix"""
-    f = np.sqrt(monitor.height**2 + monitor.width**2)
-    return np.array([   [f, 0, monitor.width/2, 0],
-                        [0, f, monitor.height/2, 0],
-                        [0, 0, 1, 0]])
+    return np.array([   [fx, 0, cx, 0],
+                        [0, fy, cy, 0],
+                        [0, 0,  1,  0]])
 
 
 def rotation_matrix(rx, ry, rz):

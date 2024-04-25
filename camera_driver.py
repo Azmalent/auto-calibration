@@ -45,11 +45,11 @@ if __name__ == '__main__':
         while True:
             msg = conn.recv()
             if msg == 'capture':
-                result = False
-                while not result:
-                    result, image = driver.capture()
-                    if result:
-                        calibrator_client.send(image)
+                result, image = driver.capture()
+                if result:
+                    calibrator_client.send(image)
+                else:
+                    raise RuntimeError('Failed to capture image')
             elif msg == 'exit':
                 driver.log('received exit message')
                 break

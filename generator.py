@@ -27,7 +27,13 @@ class ImageGenerator():
 
     def __init__(self, monitor, mm_from_camera = 1000):
         self.monitor = monitor
+        
+        w, h = monitor.width, monitor.height
+        f = np.sqrt(w**2 + h**2)
+        self.set_camera_matrix(f, f, w / 2, h / 2)
+
         self.random = Random()
+        self.apply_2d_offset = True
 
         pixels_per_mm = monitor.width / monitor.width_mm
         self.z_dist = mm_from_camera * pixels_per_mm
@@ -37,6 +43,13 @@ class ImageGenerator():
         print('[Generator] ' + message)
 
 
+    def set_camera_matrix(self, fx, fy, cx, cy):
+        self.fx = fx
+        self.fy = fy
+        self.cx = cx
+        self.cy = cy
+
+
     def next(self, nodal_offset = None): 
         """
         Generates the next image.
@@ -44,23 +57,28 @@ class ImageGenerator():
         rx = self.random_angle(ImageGenerator.MAX_ANGLE)
         ry = self.random_angle(ImageGenerator.MAX_ANGLE)
         rz = self.random_angle(180)
-
-        proj_3d = proj_matrix_3d(self.monitor)
-        proj_2d = proj_matrix_2d(self.monitor)
         
-        trans   = translation_matrix_3d(0, 0, self.z_dist)
-        rot     = rotation_matrix(rx, ry, rz)
+        trans = translation_matrix_3d(0, 0, self.z_dist)
+        rot   = rotation_matrix(rx, ry, rz)
+
+        mat = trans @ rot
 
         if nodal_offset is not None:
-            (r, t) = nodal_offset
-            rot = r @ rot
-            trans = r @ trans + t
+            (R, T) = nodal_offset
+            print(mat)
+            mat = translation_matrix_3d(T[0], T[1], T[2]) @ R @ mat
+            print(mat)
 
-        mat = proj_2d @ trans @ rot @ proj_3d
+        mat = proj_matrix_2d(self.fx, self.fy, self.cx, self.cy) @ mat @ proj_matrix_3d(self.monitor)
 
-        if nodal_offset is None:
+        # 2D offsets
+        (dx, dy) = (None, None)
+        if self.apply_2d_offset and nodal_offset is None: 
             (dx, dy) = self.random_offsets(mat)
-            mat = translation_matrix_2d(dx, dy) @ mat
+        else:
+            (dx, dy) = self.center_offset(mat)
+
+        mat = translation_matrix_2d(dx, dy) @ mat
 
         image = cv2.warpPerspective(CHECKERBOARD.copy(), mat, (self.monitor.width, self.monitor.height), borderMode=cv2.BORDER_CONSTANT, borderValue=ImageGenerator.BACKGROUND_COLOR)
         
@@ -72,6 +90,15 @@ class ImageGenerator():
         degrees = self.random.uniform(-max_degrees, max_degrees)
         return radians(degrees)
 
+
+    def center_offset(self, mat):
+        """Move the 2d object to the middle of the screen"""
+        corners = corner_positions(CHECKERBOARD, mat)
+        (left, right, top, bottom) = bounds(corners)
+
+        dx = (self.monitor.width - right - left) / 2 
+        dy = (self.monitor.height - bottom - top) / 2
+        return (dx, dy)
 
     def random_offsets(self, mat):
         """Generate random offsets for the checkerboard"""
@@ -126,8 +153,11 @@ if __name__ == '__main__':
                     camera_client.send('capture')
                 elif command == 'set_seed':
                     gen.random.seed(args[0])
-                elif command == 'set_nodal_offset':
-                    pass #TODO
+                elif command == 'set_camera_matrix':
+                    mtx = args[0]
+                    gen.set_camera_matrix(mtx[0, 0], mtx[1, 1], mtx[0, 2], mtx[1, 2])
+                elif command == 'disable_2d_offset':
+                    gen.apply_2d_offset = False
                 elif command == 'exit':
                     gen.log('received exit message')
                     break

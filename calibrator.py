@@ -2,7 +2,7 @@ from datetime import datetime
 from generator import ImageGenerator
 from multiprocessing.connection import Client, Listener
 from screeninfo import get_monitors
-from utils import find_free_port, init_dir, translation_matrix_3d
+from utils import find_free_port, init_dir
 import cv2
 import numpy as np
 import os
@@ -15,6 +15,9 @@ BOARD_SIZE = (8, 6)
 
 CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
+NUM_DISTORTION_SNAPSHOTS = 10
+NUM_NODAL_OFFSET_SNAPSHOTS = 15
+
 class BaseCalibrator():
     def __init__(self):
         self.monitor = get_monitors()[0]
@@ -23,6 +26,7 @@ class BaseCalibrator():
         self.objpoints[:,:2] = np.mgrid[0:BOARD_SIZE[0], 0:BOARD_SIZE[1]].T.reshape(-1,2)
 
         self.num_captures = 0
+
 
 class LensCalibrator(BaseCalibrator):
     def __init__(self):
@@ -35,7 +39,9 @@ class LensCalibrator(BaseCalibrator):
         print('[Lens Calibrator] ' + message)
     
 
-    def accept_image(self, img):        
+    def accept_image(self, img):      
+        self.log('accepting image #' + str(self.num_captures + 1))
+
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         success, corners = cv2.findChessboardCorners(gray, BOARD_SIZE, None)
 
@@ -51,7 +57,7 @@ class LensCalibrator(BaseCalibrator):
 
 
     def is_done(self):
-        return self.num_captures >= 10
+        return self.num_captures >= NUM_DISTORTION_SNAPSHOTS
     
 
     def calibrate_lens(self):
@@ -84,6 +90,8 @@ class LensCalibrator(BaseCalibrator):
         x, y, w, h = roi
         undistorted = undistorted[y:y+h, x:x+w]
         cv2.imwrite('output/undistorted.png', undistorted)
+        
+        self.log('calibration complete!')
 
         return (mtx, new_mtx, dist)
 
@@ -95,17 +103,14 @@ class NodalOffsetCalibrator(BaseCalibrator):
         self.p_imgpoints = []
         self.v_imgpoints = []
 
-        self.p_matrix = mtx
+        self.matrix = mtx
         self.new_matrix = new_mtx
         self.distortion = distortion
         self.camera_dist = cam_dist
         self.nodal_offset = None
 
         self.gen = ImageGenerator(self.monitor, cam_dist + 1000)
-
-        w, h = self.monitor.width, self.monitor.height
-        f = np.sqrt(w**2 + h**2)
-        self.v_matrix = np.array([[f, 0, w/2], [0, f, h/2], [0, 0, 1]])
+        self.gen.set_camera_matrix(mtx[0, 0], mtx[1, 1], mtx[0, 2], mtx[1, 2])
 
 
     def log(self, message):
@@ -113,8 +118,26 @@ class NodalOffsetCalibrator(BaseCalibrator):
 
 
     def accept_image(self, img):
-        img = cv2.undistort(img, self.p_matrix, self.distortion, None, self.new_matrix)
+        self.log('accepting image #' + str(self.num_captures + 1))
+
+        img = cv2.undistort(img, self.matrix, self.distortion, None, self.new_matrix)
+        
+        # Save original image before applying offset
+        if self.nodal_offset is not None:
+            gen = self.gen
+            
+            gen2 = ImageGenerator(self.monitor, self.camera_dist + 1000)
+            gen2.set_camera_matrix(gen.fx, gen.fy, gen.cx, gen.cy)
+            gen2.random.setstate( gen.random.getstate() )
+            gen2.apply_2d_offset = False
+
+            img2_original = gen2.next()
+            cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_original.png', img2_original)
+
         img2 = self.gen.next(self.nodal_offset)
+        
+        cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_physical.png', img)
+        cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_virtual.png', img2)
 
         gray1 = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         ret1, corners1 = cv2.findChessboardCorners(gray1, BOARD_SIZE, None)
@@ -128,16 +151,13 @@ class NodalOffsetCalibrator(BaseCalibrator):
             #cv2.drawChessboardCorners(img, BOARD_SIZE, corners1, ret1)
             #cv2.drawChessboardCorners(img2, BOARD_SIZE, corners2, ret2)
 
-            cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_physical.png', img)
-            cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_virtual.png', img2)
-
             self.p_imgpoints.append(corners1)
             self.v_imgpoints.append(corners2)
 
-            if self.is_done():
-                self.calibrate_nodal_offset()
-
             self.num_captures += 1
+
+            if self.num_captures + 1 == NUM_NODAL_OFFSET_SNAPSHOTS:
+                self.calibrate_nodal_offset()
 
 
     def calibrate_nodal_offset(self):
@@ -145,25 +165,27 @@ class NodalOffsetCalibrator(BaseCalibrator):
         (w, h) = self.monitor.width, self.monitor.height
 
         no_distortion = np.zeros((5, 1))
-        _, _, _, _, _, R, T, _, _ = cv2.stereoCalibrate([self.objpoints] * n, self.v_pimgpoints, self.p_imgpoints, self.v_matrix, no_distortion, self.p_matrix, no_distortion, (w, h), flags=cv2.CALIB_FIX_INTRINSIC)
-
-        rot = np.array([
-            [R[0][0], R[0][1], R[0][2], 0],
-            [R[1][0], R[1][1], R[1][2], 0],
-            [R[2][0], R[2][1], R[2][2], 0],
-            [0, 0, 0, 1]
-        ])
-        
-        trans = translation_matrix_3d(T[0][0], T[1][0], T[2][0])
-        self.nodal_offset = (rot, trans)
+        _, _, _, _, _, R, T, _, _ = cv2.stereoCalibrate([self.objpoints] * n, self.v_imgpoints, self.p_imgpoints, self.matrix, no_distortion, self.matrix, no_distortion, (w, h), flags=cv2.CALIB_FIX_INTRINSIC)
 
         np.savetxt('output/nodal_offset_rotation.txt', R)
         np.savetxt('output/nodal_offset_translation.txt', T)
-    
+
+        R = np.array([
+            [R[0, 0], R[0, 1], R[0, 2], 0],
+            [R[1, 0], R[1, 1], R[1, 2], 0],
+            [R[2, 0], R[2, 1], R[2, 2], 0],
+            [0, 0, 0, 1]
+        ])
+
+        self.nodal_offset = (R, T.flatten())
+        self.gen.apply_2d_offset = False
+        
+        self.log('calibration complete!')
+
 
     def is_done(self):
-        return self.num_captures > 10
-
+        return self.num_captures >= NUM_NODAL_OFFSET_SNAPSHOTS
+    
 
 if __name__ == '__main__':
     print('Enter distance from camera to screen in mm: ', end='')
@@ -206,11 +228,15 @@ if __name__ == '__main__':
             if img is not None:
                 calibrator.accept_image(img)
 
-                if calibrator.is_done():
-                    calibrator.log('calibration complete!')
+                # TODO: refactor
+                if type(calibrator) == NodalOffsetCalibrator and calibrator.nodal_offset is not None:
+                    generator_client.send(['disable_2d_offset'])
 
+                if calibrator.is_done():
                     if type(calibrator) == LensCalibrator:
                         (mtx, new_mtx, dist) = calibrator.calibrate_lens()
+                        generator_client.send(['set_camera_matrix', mtx])
+
                         calibrator = NodalOffsetCalibrator(mtx, new_mtx, dist, cam_distance)
 
                         seed = datetime.now().timestamp()
@@ -220,6 +246,9 @@ if __name__ == '__main__':
                         break
 
                 generator_client.send(['next'])
+    except Exception as e:
+        print('Error: ' + e.__class__.__name__)
+        print(e)
     finally:
         listener.close()
         conn.close()
