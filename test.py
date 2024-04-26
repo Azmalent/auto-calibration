@@ -4,7 +4,7 @@ from utils import *
 import cv2
 
 monitor = get_monitors()[0]
-gen = ImageGenerator(monitor, 'nodal', 225 * 2)
+gen = ImageGenerator(monitor, 'nodal', 225)
 gen.camera_matrix[0:3, 0:3] = np.loadtxt('output/camera_matrix.txt')
 
 cv2.namedWindow('window', cv2.WND_PROP_FULLSCREEN)
