@@ -54,12 +54,14 @@ class ImageGenerator():
         mat = None
         if self.mode == 'lens':
             mat = self.matrix_lens()
+        elif self.mode == 'extrinsic':
+            mat = self.matrix_extrinsic()
         elif self.mode == 'nodal':
             mat = self.matrix_nodal()
         elif self.mode == 'virtual':
             mat = self.matrix_virtual(nodal_offset)
 
-        return cv2.warpPerspective(CHECKERBOARD.copy(), mat, (self.monitor.width, self.monitor.height), borderMode=cv2.BORDER_CONSTANT, borderValue=ImageGenerator.BACKGROUND_COLOR)
+        return cv2.warpPerspective(CHECKERBOARD, mat, (self.monitor.width, self.monitor.height), borderMode=cv2.BORDER_CONSTANT, borderValue=ImageGenerator.BACKGROUND_COLOR)
 
 
     # For lens calibration
@@ -80,6 +82,13 @@ class ImageGenerator():
         offset_2d = translation_matrix_2d(dx, dy)
 
         return offset_2d @ mat
+
+
+    # For extrinsic calibration
+    # Moves checkerboard to the middle of the screen
+    def matrix_extrinsic(self):
+        h, w = CHECKERBOARD.shape[:2]
+        return translation_matrix_2d((self.monitor.width - w) / 2, (self.monitor.height - h) / 2)
 
 
     # For nodal offset calibration (screen)

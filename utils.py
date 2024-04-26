@@ -45,7 +45,7 @@ def proj_matrix_3d(width, height):
     """2D -> 3D projection matrix"""
     return np.array([   [1, 0, -width / 2],
                         [0, 1, -height / 2],
-                        [0, 0, 1],
+                        [0, 0, 0],
                         [0, 0, 1]])
 
 

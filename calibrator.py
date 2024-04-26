@@ -1,8 +1,8 @@
 from datetime import datetime
-from generator import ImageGenerator
+from generator import CHECKERBOARD, ImageGenerator
 from multiprocessing.connection import Client, Listener
 from screeninfo import get_monitors
-from utils import find_free_port, init_dir
+from utils import find_free_port, init_dir, translation_matrix_2d
 import cv2
 import numpy as np
 import os
@@ -17,6 +17,8 @@ CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
 NUM_DISTORTION_SNAPSHOTS = 10
 NUM_NODAL_OFFSET_SNAPSHOTS = 15
+
+RVEC, TVEC = None, None #TODO refactor
 
 class BaseCalibrator():
     def __init__(self):
@@ -95,6 +97,38 @@ class LensCalibrator(BaseCalibrator):
         self.log('calibration complete!')
 
         return (mtx, new_mtx, dist)
+
+
+class ExtrinsicCalibrator(BaseCalibrator):
+    def __init__(self, mtx, distortion):
+        super().__init__()
+
+        self.matrix = mtx
+        self.distortion = distortion
+        self.done = False
+
+    def log(self, message):
+        print('[Extrinsic Calibrator] ' + message)
+
+
+    def accept_image(self, img):
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        success, corners = cv2.findChessboardCorners(gray, BOARD_SIZE, None)
+        
+        if not success:
+            raise RuntimeError('Failed to find corners for extrinsic calibration')
+        
+        _, RVEC, TVEC = cv2.solvePnP(self.objpoints, corners, self.matrix, self.distortion)
+
+        np.savetxt('output/rvec.txt', RVEC)
+        np.savetxt('output/tvec.txt', TVEC)
+
+        self.log('calibration complete!')
+        self.done = True
+
+
+    def is_done(self):
+        return self.done
 
 
 class NodalOffsetCalibrator(BaseCalibrator):
@@ -220,6 +254,8 @@ if __name__ == '__main__':
     generator_client.send(['next'])
 
     try:
+        intrinsics = None
+
         while True:
             img = conn.recv()
             if img is not None:
@@ -227,15 +263,21 @@ if __name__ == '__main__':
 
                 if calibrator.is_done():
                     if type(calibrator) == LensCalibrator:
-                        (mtx, new_mtx, dist) = calibrator.calibrate_lens()
-                        generator_client.send(['set_mode', 'nodal'])
-
+                        intrinsics = calibrator.calibrate_lens()
+                        
+                        (mtx, _, dist) = intrinsics
+                        calibrator = ExtrinsicCalibrator(mtx, dist)
+                        generator_client.send(['set_mode', 'extrinsic'])
+                    elif type(calibrator) == ExtrinsicCalibrator:
+                        (mtx, new_mtx, dist) = intrinsics
                         calibrator = NodalOffsetCalibrator(mtx, new_mtx, dist, cam_distance)
+                        generator_client.send(['set_mode', 'nodal'])
 
                         seed = datetime.now().timestamp()
                         calibrator.gen.random.seed(seed)
                         generator_client.send(['set_seed', seed])
-                    else:
+
+                    elif type(calibrator) == NodalOffsetCalibrator:
                         break
 
                 generator_client.send(['next'])
