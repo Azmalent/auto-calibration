@@ -41,19 +41,12 @@ def bounds(corners):
     return (min(xs), max(xs), min(ys), max(ys))
 
 
-def proj_matrix_3d(monitor):
+def proj_matrix_3d(width, height):
     """2D -> 3D projection matrix"""
-    return np.array([   [1, 0, -monitor.width/2],
-                        [0, 1, -monitor.height/2],
+    return np.array([   [1, 0, -width / 2],
+                        [0, 1, -height / 2],
                         [0, 0, 1],
                         [0, 0, 1]])
-
-
-def proj_matrix_2d(fx, fy, cx, cy):
-    """3D -> 2D projection matrix"""
-    return np.array([   [fx, 0, cx, 0],
-                        [0, fy, cy, 0],
-                        [0, 0,  1,  0]])
 
 
 def rotation_matrix(rx, ry, rz):

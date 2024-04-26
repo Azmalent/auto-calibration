@@ -83,6 +83,7 @@ class LensCalibrator(BaseCalibrator):
 
         # Undistort image
         new_mtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
+        np.savetxt('output/optimal_camera_matrix.txt', new_mtx)
 
         undistorted = cv2.undistort(img, mtx, dist, None, new_mtx)
 
@@ -109,8 +110,9 @@ class NodalOffsetCalibrator(BaseCalibrator):
         self.camera_dist = cam_dist
         self.nodal_offset = None
 
-        self.gen = ImageGenerator(self.monitor, cam_dist + 1000)
-        self.gen.set_camera_matrix(mtx[0, 0], mtx[1, 1], mtx[0, 2], mtx[1, 2])
+        self.gen = ImageGenerator(self.monitor, 'virtual', cam_dist)
+        self.gen.camera_matrix = np.zeros((3, 4))
+        self.gen.camera_matrix[0:3, 0:3] = mtx
 
 
     def log(self, message):
@@ -123,18 +125,13 @@ class NodalOffsetCalibrator(BaseCalibrator):
         img = cv2.undistort(img, self.matrix, self.distortion, None, self.new_matrix)
         
         # Save original image before applying offset
+        gen = self.gen
         if self.nodal_offset is not None:
-            gen = self.gen
-            
-            gen2 = ImageGenerator(self.monitor, self.camera_dist + 1000)
-            gen2.set_camera_matrix(gen.fx, gen.fy, gen.cx, gen.cy)
-            gen2.random.setstate( gen.random.getstate() )
-            gen2.apply_2d_offset = False
+            state = gen.random.getstate()
+            cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_original.png', gen.next())
+            gen.random.setstate(state)
 
-            img2_original = gen2.next()
-            cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_original.png', img2_original)
-
-        img2 = self.gen.next(self.nodal_offset)
+        img2 = gen.next(self.nodal_offset)
         
         cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_physical.png', img)
         cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_virtual.png', img2)
@@ -228,14 +225,10 @@ if __name__ == '__main__':
             if img is not None:
                 calibrator.accept_image(img)
 
-                # TODO: refactor
-                if type(calibrator) == NodalOffsetCalibrator and calibrator.nodal_offset is not None:
-                    generator_client.send(['disable_2d_offset'])
-
                 if calibrator.is_done():
                     if type(calibrator) == LensCalibrator:
                         (mtx, new_mtx, dist) = calibrator.calibrate_lens()
-                        generator_client.send(['set_camera_matrix', mtx])
+                        generator_client.send(['set_mode', 'nodal'])
 
                         calibrator = NodalOffsetCalibrator(mtx, new_mtx, dist, cam_distance)
 

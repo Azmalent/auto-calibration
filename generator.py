@@ -25,15 +25,19 @@ class ImageGenerator():
     MAX_ANGLE = 50
     BACKGROUND_COLOR = (0, 255, 0, 255)
 
-    def __init__(self, monitor, mm_from_camera = 1000):
+    def __init__(self, monitor, mode = 'lens', mm_from_camera = 1000):
         self.monitor = monitor
+        self.mode = mode
         
         w, h = monitor.width, monitor.height
         f = np.sqrt(w**2 + h**2)
-        self.set_camera_matrix(f, f, w / 2, h / 2)
+        self.camera_matrix = np.array([
+            [f, 0, w / 2, 0],
+            [0, f, h / 2, 0],
+            [0, 0, 1, 0]
+        ])
 
         self.random = Random()
-        self.apply_2d_offset = True
 
         pixels_per_mm = monitor.width / monitor.width_mm
         self.z_dist = mm_from_camera * pixels_per_mm
@@ -43,46 +47,76 @@ class ImageGenerator():
         print('[Generator] ' + message)
 
 
-    def set_camera_matrix(self, fx, fy, cx, cy):
-        self.fx = fx
-        self.fy = fy
-        self.cx = cx
-        self.cy = cy
-
-
     def next(self, nodal_offset = None): 
         """
         Generates the next image.
         """
+        mat = None
+        if self.mode == 'lens':
+            mat = self.matrix_lens()
+        elif self.mode == 'nodal':
+            mat = self.matrix_nodal()
+        elif self.mode == 'virtual':
+            mat = self.matrix_virtual(nodal_offset)
+
+        return cv2.warpPerspective(CHECKERBOARD.copy(), mat, (self.monitor.width, self.monitor.height), borderMode=cv2.BORDER_CONSTANT, borderValue=ImageGenerator.BACKGROUND_COLOR)
+
+
+    # For lens calibration
+    # Random 3D rotation + random 2D offset
+    def matrix_lens(self):
+        proj_3d = proj_matrix_3d(CHECKERBOARD.shape[1], CHECKERBOARD.shape[0])
+
         rx = self.random_angle(ImageGenerator.MAX_ANGLE)
         ry = self.random_angle(ImageGenerator.MAX_ANGLE)
         rz = self.random_angle(180)
-        
-        trans = translation_matrix_3d(0, 0, self.z_dist)
-        rot   = rotation_matrix(rx, ry, rz)
+        rot = rotation_matrix(rx, ry, rz)
 
-        mat = trans @ rot
+        trans = translation_matrix_3d(0, 0, self.z_dist)
+
+        mat = self.camera_matrix @ trans @ rot @ proj_3d
+
+        (dx, dy) = self.random_offsets(mat)
+        offset_2d = translation_matrix_2d(dx, dy)
+
+        return offset_2d @ mat
+
+
+    # For nodal offset calibration (screen)
+    # Random 2D offset, rotation and scale
+    def matrix_nodal(self):
+        a = self.random_angle(180)
+        rot = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+
+        corners = corner_positions(CHECKERBOARD, rot)
+        (left, right, top, bottom) = bounds(corners)
+
+        # Random scale
+        (width, height) = (right - left, bottom - top)
+        max_scale = min(self.monitor.width / width, self.monitor.height / height)
+        
+        scale = self.random.uniform(max_scale / 2, max_scale)
+        scale_mat = np.array([[scale, 0, 0], [0, scale, 0], [0, 0, 1]])
+
+        mat = rot @ scale_mat
+        (dx, dy) = self.random_offsets(mat)
+        return translation_matrix_2d(dx, dy) @ mat
+    
+    
+    # For nodal offset calibration (virtual camera)
+    # Random 2D + 3D offset on Z axis
+    def matrix_virtual(self, nodal_offset = None):
+        nodal = self.matrix_nodal()
+
+        proj_3d = proj_matrix_3d(self.monitor.width, self.monitor.height)
+        
+        mat = translation_matrix_3d(0, 0, self.z_dist)
 
         if nodal_offset is not None:
             (R, T) = nodal_offset
-            print(mat)
             mat = translation_matrix_3d(T[0], T[1], T[2]) @ R @ mat
-            print(mat)
 
-        mat = proj_matrix_2d(self.fx, self.fy, self.cx, self.cy) @ mat @ proj_matrix_3d(self.monitor)
-
-        # 2D offsets
-        (dx, dy) = (None, None)
-        if self.apply_2d_offset and nodal_offset is None: 
-            (dx, dy) = self.random_offsets(mat)
-        else:
-            (dx, dy) = self.center_offset(mat)
-
-        mat = translation_matrix_2d(dx, dy) @ mat
-
-        image = cv2.warpPerspective(CHECKERBOARD.copy(), mat, (self.monitor.width, self.monitor.height), borderMode=cv2.BORDER_CONSTANT, borderValue=ImageGenerator.BACKGROUND_COLOR)
-        
-        return image
+        return self.camera_matrix @ mat @ proj_3d @ nodal
 
 
     def random_angle(self, max_degrees):
@@ -90,15 +124,6 @@ class ImageGenerator():
         degrees = self.random.uniform(-max_degrees, max_degrees)
         return radians(degrees)
 
-
-    def center_offset(self, mat):
-        """Move the 2d object to the middle of the screen"""
-        corners = corner_positions(CHECKERBOARD, mat)
-        (left, right, top, bottom) = bounds(corners)
-
-        dx = (self.monitor.width - right - left) / 2 
-        dy = (self.monitor.height - bottom - top) / 2
-        return (dx, dy)
 
     def random_offsets(self, mat):
         """Generate random offsets for the checkerboard"""
@@ -153,11 +178,8 @@ if __name__ == '__main__':
                     camera_client.send('capture')
                 elif command == 'set_seed':
                     gen.random.seed(args[0])
-                elif command == 'set_camera_matrix':
-                    mtx = args[0]
-                    gen.set_camera_matrix(mtx[0, 0], mtx[1, 1], mtx[0, 2], mtx[1, 2])
-                elif command == 'disable_2d_offset':
-                    gen.apply_2d_offset = False
+                elif command == 'set_mode':
+                    gen.mode = args[0]
                 elif command == 'exit':
                     gen.log('received exit message')
                     break
