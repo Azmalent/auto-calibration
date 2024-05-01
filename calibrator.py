@@ -25,7 +25,7 @@ class BaseCalibrator():
         self.monitor = get_monitors()[0]
 
         self.objpoints = np.zeros((BOARD_SIZE[0] * BOARD_SIZE[1], 3), np.float32)
-        self.objpoints[:,:2] = np.mgrid[0:BOARD_SIZE[0], 0:BOARD_SIZE[1]].T.reshape(-1,2)
+        self.objpoints[:,:2] = np.mgrid[0:BOARD_SIZE[0], 0:BOARD_SIZE[1]].T.reshape(-1,2) * SQUARE_SIZE
 
         self.num_captures = 0
 
@@ -97,38 +97,6 @@ class LensCalibrator(BaseCalibrator):
         self.log('calibration complete!')
 
         return (mtx, new_mtx, dist)
-
-
-class ExtrinsicCalibrator(BaseCalibrator):
-    def __init__(self, mtx, distortion):
-        super().__init__()
-
-        self.matrix = mtx
-        self.distortion = distortion
-        self.done = False
-
-    def log(self, message):
-        print('[Extrinsic Calibrator] ' + message)
-
-
-    def accept_image(self, img):
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        success, corners = cv2.findChessboardCorners(gray, BOARD_SIZE, None)
-        
-        if not success:
-            raise RuntimeError('Failed to find corners for extrinsic calibration')
-        
-        _, RVEC, TVEC = cv2.solvePnP(self.objpoints, corners, self.matrix, self.distortion)
-
-        np.savetxt('output/rvec.txt', RVEC)
-        np.savetxt('output/tvec.txt', TVEC)
-
-        self.log('calibration complete!')
-        self.done = True
-
-
-    def is_done(self):
-        return self.done
 
 
 class NodalOffsetCalibrator(BaseCalibrator):
