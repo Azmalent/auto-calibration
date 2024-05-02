@@ -50,7 +50,7 @@ class VirtualCamera:
 
 
     def capture(self, image):
-        pts2d = self.project_2d()
+        pts2d = self.project()
         xs, ys = np.split(pts2d, 2)
         map_x = xs.reshape(self.height, self.width).astype(np.float32)
         map_y = ys.reshape(self.height, self.width).astype(np.float32)
