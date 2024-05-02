@@ -140,9 +140,6 @@ class NodalOffsetCalibrator(BaseCalibrator):
 
             self.num_captures += 1
 
-            if self.num_captures + 1 == NUM_NODAL_OFFSET_SNAPSHOTS:
-                self.calibrate_nodal_offset()
-
 
     def calibrate_nodal_offset(self):
         n = len(self.imgpoints)
@@ -193,6 +190,7 @@ class NodalOffsetCalibrator(BaseCalibrator):
                 raise RuntimeError('failed to find corners for nodal offset error calculation')
             
         mean_error = sum(errors) / len(errors)
+        np.savetxt('output/nodal_offset_error.txt', [mean_error])
         self.log('nodal offset error: ' + str(mean_error))
 
         
