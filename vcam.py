@@ -29,7 +29,7 @@ class VirtualCamera:
 
 
     # TODO: nodal offset
-    def project_2d(self, apply_nodal_offset):
+    def project_2d(self):
         fx = self.matrix[0, 0]
         fy = self.matrix[1, 1]
         u0 = self.matrix[0, 2]
@@ -37,7 +37,7 @@ class VirtualCamera:
 
         points = self.points
 
-        if apply_nodal_offset and self.nodal_offset is not None:
+        if self.nodal_offset is not None:
             R, T = self.nodal_offset
             points = translation_matrix_3d(T[0], T[1], T[2]) @ R @ points
 
@@ -45,8 +45,8 @@ class VirtualCamera:
         return np.concatenate(([fx * (X / Z) + u0], [fy * (Y / Z) + v0]))
 
 
-    def capture(self, image, apply_nodal_offset = True):
-        pts2d = self.project_2d(apply_nodal_offset)
+    def capture(self, image):
+        pts2d = self.project_2d()
         xs, ys = np.split(pts2d, 2)
         map_x = xs.reshape(self.height, self.width).astype(np.float32)
         map_y = ys.reshape(self.height, self.width).astype(np.float32)

@@ -117,23 +117,23 @@ class NodalOffsetCalibrator(BaseCalibrator):
     def accept_image(self, img):
         self.log('accepting image #' + str(self.num_captures + 1))
 
-        p_img = cv2.undistort(img, self.matrix, self.distortion, None, self.new_matrix)
-        v_img = self.vcam.capture( self.gen.next() )
+        original_img = self.gen.next()
+        physical_img = cv2.undistort(img, self.matrix, self.distortion, None, self.new_matrix)
+        virtual_img = self.vcam.capture(original_img)
         
-        cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_physical.png', p_img)
-        cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_virtual.png', v_img)
+        cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_original.png', original_img)
+        cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_physical.png', physical_img)
+        cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_virtual.png',  virtual_img)
 
-        gray1 = cv2.cvtColor(p_img, cv2.COLOR_BGR2GRAY)
+        gray1 = cv2.cvtColor(physical_img, cv2.COLOR_BGR2GRAY)
         ret1, corners1 = cv2.findChessboardCorners(gray1, BOARD_SIZE, None)
 
-        gray2 = cv2.cvtColor(v_img, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(virtual_img, cv2.COLOR_BGR2GRAY)
         ret2, corners2 = cv2.findChessboardCorners(gray2, BOARD_SIZE, None)
 
         if ret1 and ret2:
             corners1 = cv2.cornerSubPix(gray1, corners1, (11, 11), (-1,-1), CRITERIA)
             corners2 = cv2.cornerSubPix(gray2, corners2, (11, 11), (-1,-1), CRITERIA)
-            #cv2.drawChessboardCorners(img, BOARD_SIZE, corners1, ret1)
-            #cv2.drawChessboardCorners(img2, BOARD_SIZE, corners2, ret2)
 
             self.imgpoints.append(corners1)
             self.v_imgpoints.append(corners2)
@@ -162,8 +162,40 @@ class NodalOffsetCalibrator(BaseCalibrator):
         ])
 
         self.vcam.nodal_offset = (R, T.flatten())
-    
+        self.calculate_error()
+
         self.log('calibration complete!')
+
+    
+    def calculate_error(self):
+        errors = []
+
+        for i in range(self.num_captures):
+            physical_img = cv2.imread('captures/nodal_offset/capture' + str(i) + '_physical.png')
+
+            original_img = cv2.imread('captures/nodal_offset/capture' + str(i) + '_original.png')
+            virtual_img = self.vcam.capture(original_img)
+
+            cv2.imwrite('captures/nodal_offset/capture' + str(i) + '_virtual_corrected.png',  virtual_img)
+
+            gray1 = cv2.cvtColor(physical_img, cv2.COLOR_BGR2GRAY)
+            ret1, corners1 = cv2.findChessboardCorners(gray1, BOARD_SIZE, None)
+
+            gray2 = cv2.cvtColor(virtual_img, cv2.COLOR_BGR2GRAY)
+            ret2, corners2 = cv2.findChessboardCorners(gray2, BOARD_SIZE, None)
+
+            if ret1 and ret2:
+                corners1 = cv2.cornerSubPix(gray1, corners1, (11, 11), (-1,-1), CRITERIA)
+                corners2 = cv2.cornerSubPix(gray2, corners2, (11, 11), (-1,-1), CRITERIA)
+
+                errors.append(cv2.norm(corners1, corners2, cv2.NORM_L2) / len(corners2))
+            else:
+                raise RuntimeError('failed to find corners for nodal offset error calculation')
+            
+        mean_error = sum(errors) / len(errors)
+        self.log('nodal offset error: ' + str(mean_error))
+
+        
 
 
     def is_done(self):
@@ -220,6 +252,7 @@ if __name__ == '__main__':
                         calibrator.gen.random.seed(seed)
                         generator_client.send(['set_seed', seed])
                     elif type(calibrator) == NodalOffsetCalibrator:
+                        calibrator.calibrate_nodal_offset()
                         break
 
                 generator_client.send(['next'])
