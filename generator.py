@@ -25,9 +25,10 @@ class ImageGenerator():
     MAX_ANGLE = 50
     BACKGROUND_COLOR = (0, 255, 0, 255)
 
-    def __init__(self, monitor, mode = 'lens', mm_from_camera = 1000):
+    def __init__(self, monitor):
         self.monitor = monitor
-        self.mode = mode
+        
+        self.random = Random()
         
         w, h = monitor.width, monitor.height
         f = np.sqrt(w**2 + h**2)
@@ -37,95 +38,38 @@ class ImageGenerator():
             [0, 0, 1, 0]
         ])
 
-        self.random = Random()
+        self.proj_3d = proj_matrix_3d(CHECKERBOARD.shape[1], CHECKERBOARD.shape[0])
 
         pixels_per_mm = monitor.width / monitor.width_mm
-        self.z_dist = mm_from_camera * pixels_per_mm
+        self.trans = translation_matrix_3d(0, 0, 1000 * pixels_per_mm)
 
 
     def log(self, message):
         print('[Generator] ' + message)
 
 
-    def next(self, nodal_offset = None): 
+    def next(self): 
         """
         Generates the next image.
         """
-        mat = None
-        if self.mode == 'lens':
-            mat = self.matrix_lens()
-        elif self.mode == 'extrinsic':
-            mat = self.matrix_extrinsic()
-        elif self.mode == 'nodal':
-            mat = self.matrix_nodal()
-        elif self.mode == 'virtual':
-            mat = self.matrix_virtual(nodal_offset)
-
+        mat = self.random_matrix()
         return cv2.warpPerspective(CHECKERBOARD, mat, (self.monitor.width, self.monitor.height), borderMode=cv2.BORDER_CONSTANT, borderValue=ImageGenerator.BACKGROUND_COLOR)
 
 
     # For lens calibration
     # Random 3D rotation + random 2D offset
-    def matrix_lens(self):
-        proj_3d = proj_matrix_3d(CHECKERBOARD.shape[1], CHECKERBOARD.shape[0])
-
+    def random_matrix(self):
         rx = self.random_angle(ImageGenerator.MAX_ANGLE)
         ry = self.random_angle(ImageGenerator.MAX_ANGLE)
         rz = self.random_angle(180)
         rot = rotation_matrix(rx, ry, rz)
 
-        trans = translation_matrix_3d(0, 0, self.z_dist)
-
-        mat = self.camera_matrix @ trans @ rot @ proj_3d
+        mat = self.camera_matrix @ self.trans @ rot @ self.proj_3d
 
         (dx, dy) = self.random_offsets(mat)
         offset_2d = translation_matrix_2d(dx, dy)
 
         return offset_2d @ mat
-
-
-    # For extrinsic calibration
-    # Moves checkerboard to the middle of the screen
-    def matrix_extrinsic(self):
-        h, w = CHECKERBOARD.shape[:2]
-        return translation_matrix_2d((self.monitor.width - w) / 2, (self.monitor.height - h) / 2)
-
-
-    # For nodal offset calibration (screen)
-    # Random 2D offset, rotation and scale
-    def matrix_nodal(self):
-        a = self.random_angle(180)
-        rot = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
-
-        corners = corner_positions(CHECKERBOARD, rot)
-        (left, right, top, bottom) = bounds(corners)
-
-        # Random scale
-        (width, height) = (right - left, bottom - top)
-        max_scale = min(self.monitor.width / width, self.monitor.height / height)
-        
-        scale = self.random.uniform(max_scale / 2, max_scale)
-        scale_mat = np.array([[scale, 0, 0], [0, scale, 0], [0, 0, 1]])
-
-        mat = rot @ scale_mat
-        (dx, dy) = self.random_offsets(mat)
-        return translation_matrix_2d(dx, dy) @ mat
-    
-    
-    # For nodal offset calibration (virtual camera)
-    # Random 2D + 3D offset on Z axis
-    def matrix_virtual(self, nodal_offset = None):
-        nodal = self.matrix_nodal()
-
-        proj_3d = proj_matrix_3d(self.monitor.width, self.monitor.height)
-        
-        mat = translation_matrix_3d(0, 0, self.z_dist)
-
-        if nodal_offset is not None:
-            (R, T) = nodal_offset
-            mat = translation_matrix_3d(T[0], T[1], T[2]) @ R @ mat
-
-        return self.camera_matrix @ mat @ proj_3d @ nodal
 
 
     def random_angle(self, max_degrees):
@@ -187,8 +131,6 @@ if __name__ == '__main__':
                     camera_client.send('capture')
                 elif command == 'set_seed':
                     gen.random.seed(args[0])
-                elif command == 'set_mode':
-                    gen.mode = args[0]
                 elif command == 'exit':
                     gen.log('received exit message')
                     break
