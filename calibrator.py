@@ -3,27 +3,77 @@ from generator import ImageGenerator
 from multiprocessing.connection import Client, Listener
 from screeninfo import get_monitors
 from utils import find_free_port, init_dir
+from vcam import VirtualCamera
+import argparse
 import cv2
 import numpy as np
 import os
 import subprocess
 
-from vcam import VirtualCamera
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+MONITOR = get_monitors()[0]
+MM_PER_PIXEL = MONITOR.width_mm / MONITOR.width
+PIXELS_PER_MM = MONITOR.width / MONITOR.width_mm
 
-SQUARE_SIZE = 128
+# The size of a square projection after translating by 1 meter
+SQUARE_SIZE = 50.5
 BOARD_SIZE = (8, 6)
 
-CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-
-NUM_DISTORTION_SNAPSHOTS = 10
-NUM_NODAL_OFFSET_SNAPSHOTS = 10
+CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
 
 
-class BaseCalibrator():
-    def __init__(self):
-        self.monitor = get_monitors()[0]
+def parse_args():
+    parser = argparse.ArgumentParser(prog='calibrator')
+    parser.add_argument('--mode', choices=['full', 'intrinsic', 'extrinsic'], default='full')
+    parser.add_argument('-n', '--num_captures', type=int, required=True)
+    parser.add_argument('-d', '--distance', type=int, required=True)
+    
+    return parser.parse_args()
+
+
+def init_directories():
+    init_dir('captures')
+    init_dir('captures/lens')
+    init_dir('captures/nodal_offset')
+    
+    if not os.path.isdir('output'):
+        os.mkdir('output')
+
+
+def init_network():
+    calibrator_port = find_free_port()
+    generator_port = find_free_port()
+    camera_driver_port = find_free_port()
+
+    print('Calibrator port: ' + str(calibrator_port))
+    print('Generator port: ' + str(generator_port))
+    print('Camera driver port: ' + str(camera_driver_port))
+    
+    listener = Listener(('localhost', calibrator_port), authkey=b'password')
+    
+    subprocess.Popen(['python', os.path.join(SCRIPT_DIR, 'generator.py'), 
+        '--listener-port', str(generator_port), 
+        '--client-port', str(camera_driver_port)]) 
+    
+    subprocess.Popen(['python', os.path.join(SCRIPT_DIR, 'camera_driver.py'),
+        '--listener-port', str(camera_driver_port),
+        '--client-port', str(calibrator_port)])
+    
+    generator_client = Client(('localhost', generator_port), authkey=b'password')
+
+    return (listener, generator_client)
+
+
+def sync_rngs(rng, client):
+    seed = datetime.now().timestamp()
+    rng.seed(seed)
+    client.send(['set_seed', seed])
+
+
+class AbstractCalibrator():
+    def __init__(self, num_snapshots):
+        self.monitor = MONITOR
         
         self.imgpoints = []
 
@@ -31,9 +81,13 @@ class BaseCalibrator():
         self.objpoints[:,:2] = np.mgrid[0:BOARD_SIZE[0], 0:BOARD_SIZE[1]].T.reshape(-1,2) * SQUARE_SIZE
 
         self.num_captures = 0
+        self.required_num_captures = num_snapshots
+        
+    def is_done(self):
+        return self.num_captures >= self.required_num_captures
 
 
-class LensCalibrator(BaseCalibrator):
+class LensCalibrator(AbstractCalibrator):
     def log(self, message):
         print('[Lens Calibrator] ' + message)
     
@@ -54,20 +108,16 @@ class LensCalibrator(BaseCalibrator):
         else:
             self.log('failed to find corners')
 
-
-    def is_done(self):
-        return self.num_captures >= NUM_DISTORTION_SNAPSHOTS
-    
-
     def calibrate_lens(self):
         img = cv2.imread('captures/lens/capture' + str(self.num_captures - 1) + '.png')
         h, w = img.shape[:2]
 
         n = self.num_captures
 
-        _, mtx, dist, rvecs, tvecs = cv2.calibrateCamera([self.objpoints] * n, self.imgpoints, (w, h), None, None)
+        rmse, mtx, dist, rvecs, tvecs = cv2.calibrateCamera([self.objpoints] * n, self.imgpoints, (w, h), None, None)
         np.savetxt('output/camera_matrix.txt', mtx)
         np.savetxt('output/distortion.txt', dist)
+        np.savetxt('output/rmse.txt', [rmse])
         
         errors = []
         for i in range(n):
@@ -96,9 +146,9 @@ class LensCalibrator(BaseCalibrator):
         return (mtx, new_mtx, dist)
 
 
-class NodalOffsetCalibrator(BaseCalibrator):
-    def __init__(self, mtx, new_mtx, distortion, cam_dist):
-        super().__init__()
+class NodalOffsetCalibrator(AbstractCalibrator):
+    def __init__(self, mtx, new_mtx, distortion, cam_dist, num_captures):
+        super().__init__(num_captures)
 
         self.matrix = mtx
         self.new_matrix = new_mtx
@@ -146,17 +196,11 @@ class NodalOffsetCalibrator(BaseCalibrator):
         (w, h) = self.monitor.width, self.monitor.height
 
         no_distortion = np.zeros((5, 1))
-        _, _, _, _, _, R, T, _, _ = cv2.stereoCalibrate([self.objpoints] * n, self.v_imgpoints, self.imgpoints, self.matrix, no_distortion, self.matrix, no_distortion, (w, h), flags=cv2.CALIB_FIX_INTRINSIC)
+        rmse, _, _, _, _, R, T, _, _ = cv2.stereoCalibrate([self.objpoints] * n, self.v_imgpoints, self.imgpoints, self.matrix, no_distortion, self.matrix, no_distortion, (w, h), flags=cv2.CALIB_FIX_INTRINSIC)
 
         np.savetxt('output/nodal_offset_rotation.txt', R)
         np.savetxt('output/nodal_offset_translation.txt', T)
-
-        R = np.array([
-            [R[0, 0], R[0, 1], R[0, 2], 0],
-            [R[1, 0], R[1, 1], R[1, 2], 0],
-            [R[2, 0], R[2, 1], R[2, 2], 0],
-            [0, 0, 0, 1]
-        ])
+        np.savetxt('output/nodal_offset_rmse.txt', [rmse])
 
         self.vcam.nodal_offset = (R, T.flatten())
         self.calculate_error()
@@ -193,45 +237,29 @@ class NodalOffsetCalibrator(BaseCalibrator):
         np.savetxt('output/nodal_offset_error.txt', [mean_error])
         self.log('nodal offset error: ' + str(mean_error))
 
-        
-
-
-    def is_done(self):
-        return self.num_captures >= NUM_NODAL_OFFSET_SNAPSHOTS
-    
 
 if __name__ == '__main__':
-    print('Enter distance from camera to screen in mm: ', end='')
-    cam_distance = int( input() )
-
-    init_dir('captures')
-    init_dir('captures/lens')
-    init_dir('captures/nodal_offset')
-    init_dir('output')
-
-    CALIBRATOR_PORT = find_free_port()
-    GENERATOR_PORT = find_free_port()
-    CAMERA_DRIVER_PORT = find_free_port()
-
-    print('Calibrator port: ' + str(CALIBRATOR_PORT))
-    print('Generator port: ' + str(GENERATOR_PORT))
-    print('Camera driver port: ' + str(CAMERA_DRIVER_PORT))
-
-    calibrator = LensCalibrator()
-    listener = Listener(('localhost', CALIBRATOR_PORT), authkey=b'password')
+    args = parse_args()
     
-    subprocess.Popen(['python', os.path.join(SCRIPT_DIR, 'generator.py'), 
-        '--listener-port', str(GENERATOR_PORT), 
-        '--client-port', str(CAMERA_DRIVER_PORT)]) 
-    
-    subprocess.Popen(['python', os.path.join(SCRIPT_DIR, 'camera_driver.py'),
-        '--listener-port', str(CAMERA_DRIVER_PORT),
-        '--client-port', str(CALIBRATOR_PORT)])
-    
-    generator_client = Client(('localhost', GENERATOR_PORT), authkey=b'password')
+    calibrator = None
+    (mtx, new_mtx, dist) = None, None, None
+
+    if args.mode != 'extrinsic':
+        calibrator = LensCalibrator(args.num_captures)
+    else:
+        mtx = np.loadtxt('output/camera_matrix.txt')
+        new_mtx = np.loadtxt('output/optimal_camera_matrix.txt')
+        dist = np.loadtxt('output/distortion.txt')
+        calibrator = NodalOffsetCalibrator(mtx, new_mtx, dist, args.distance, args.num_captures)
+
+    init_directories()
+    (listener, generator_client) = init_network()
     calibrator.log('connected to generator')
 
     conn = listener.accept()
+    
+    if type(calibrator) == NodalOffsetCalibrator:        
+        sync_rngs(calibrator.gen.random, generator_client)
 
     generator_client.send(['next'])
 
@@ -244,11 +272,11 @@ if __name__ == '__main__':
                 if calibrator.is_done():
                     if type(calibrator) == LensCalibrator:
                         (mtx, new_mtx, dist) = calibrator.calibrate_lens()
-                        calibrator = NodalOffsetCalibrator(mtx, new_mtx, dist, cam_distance)
-
-                        seed = datetime.now().timestamp()
-                        calibrator.gen.random.seed(seed)
-                        generator_client.send(['set_seed', seed])
+                        if args.mode == 'full':
+                            calibrator = NodalOffsetCalibrator(mtx, new_mtx, dist, args.distance, args.num_captures)
+                            sync_rngs(calibrator.gen.random, generator_client)
+                        else:
+                            break
                     elif type(calibrator) == NodalOffsetCalibrator:
                         calibrator.calibrate_nodal_offset()
                         break

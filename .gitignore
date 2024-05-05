@@ -161,3 +161,6 @@ cython_debug/
 
 captures/
 output/
+manual/captures/
+manual/undistorted/
+manual/*.txt

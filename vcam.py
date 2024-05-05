@@ -8,6 +8,8 @@ class VirtualCamera:
         self.width = monitor.width
         self.height = monitor.height
         self.matrix = matrix
+
+        self.dz = camera_dist * (monitor.width / monitor.width_mm)
         self.nodal_offset = None
         
         # Calculate 3D points of the image plane
@@ -20,20 +22,24 @@ class VirtualCamera:
         Z = X * 0
         W = X * 0 + 1
 
-        plane = np.concatenate(([X], [Y], [Z], [W]))[:, :, 0]
-        
-        dz = camera_dist * (monitor.width / monitor.width_mm)
-        trans = translation_matrix_3d(0, 0, dz)
-
-        self.points = trans @ plane
+        self.plane = np.concatenate(([X], [Y], [Z], [W]))[:, :, 0]    
 
 
     def project(self):
-        points = self.points
+        points = translation_matrix_3d(0, 0, self.dz) @ self.plane
 
         if self.nodal_offset is not None:
             R, T = self.nodal_offset
-            points = translation_matrix_3d(T[0], T[1], T[2]) @ R @ points
+            Rt = np.transpose(R)
+
+            P = np.eye(4)
+            P[:3,:3] = Rt
+            P[:3, 3] = Rt @ -T.reshape(3)
+
+            #P[:3,:3] = R
+            #P[:3, 3] = T.reshape(3)
+
+            points = P @ points
         
         X = points[0,:]
         Y = points[1,:]
