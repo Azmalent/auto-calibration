@@ -12,9 +12,6 @@ import subprocess
 
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-MONITOR = get_monitors()[0]
-MM_PER_PIXEL = MONITOR.width_mm / MONITOR.width
-PIXELS_PER_MM = MONITOR.width / MONITOR.width_mm
 
 # The size of a square projection after translating by 1 meter
 SQUARE_SIZE = 50.5
@@ -28,6 +25,7 @@ def parse_args():
     parser.add_argument('--mode', choices=['full', 'intrinsic', 'extrinsic'], default='full')
     parser.add_argument('-n', '--num_captures', type=int, required=True)
     parser.add_argument('-d', '--distance', type=int, required=True)
+    parser.add_argument('--monitor', type=int, default=0)
     
     return parser.parse_args()
 
@@ -41,7 +39,7 @@ def init_directories():
         os.mkdir('output')
 
 
-def init_network():
+def init_network(args):
     calibrator_port = find_free_port()
     generator_port = find_free_port()
     camera_driver_port = find_free_port()
@@ -54,7 +52,8 @@ def init_network():
     
     subprocess.Popen(['python', os.path.join(SCRIPT_DIR, 'generator.py'), 
         '--listener-port', str(generator_port), 
-        '--client-port', str(camera_driver_port)]) 
+        '--client-port', str(camera_driver_port),
+        '--monitor', str(args.monitor)]) 
     
     subprocess.Popen(['python', os.path.join(SCRIPT_DIR, 'camera_driver.py'),
         '--listener-port', str(camera_driver_port),
@@ -72,8 +71,8 @@ def sync_rngs(rng, client):
 
 
 class AbstractCalibrator():
-    def __init__(self, num_snapshots):
-        self.monitor = MONITOR
+    def __init__(self, monitor, num_snapshots):
+        self.monitor = monitor
         
         self.imgpoints = []
 
@@ -147,8 +146,8 @@ class LensCalibrator(AbstractCalibrator):
 
 
 class NodalOffsetCalibrator(AbstractCalibrator):
-    def __init__(self, mtx, new_mtx, distortion, cam_dist, num_captures):
-        super().__init__(num_captures)
+    def __init__(self, monitor, mtx, new_mtx, distortion, cam_dist, num_captures):
+        super().__init__(monitor, num_captures)
 
         self.matrix = mtx
         self.new_matrix = new_mtx
@@ -240,20 +239,21 @@ class NodalOffsetCalibrator(AbstractCalibrator):
 
 if __name__ == '__main__':
     args = parse_args()
+    monitor = get_monitors()[args.monitor]
     
     calibrator = None
     (mtx, new_mtx, dist) = None, None, None
 
     if args.mode != 'extrinsic':
-        calibrator = LensCalibrator(args.num_captures)
+        calibrator = LensCalibrator(monitor, args.num_captures)
     else:
         mtx = np.loadtxt('output/camera_matrix.txt')
         new_mtx = np.loadtxt('output/optimal_camera_matrix.txt')
         dist = np.loadtxt('output/distortion.txt')
-        calibrator = NodalOffsetCalibrator(mtx, new_mtx, dist, args.distance, args.num_captures)
+        calibrator = NodalOffsetCalibrator(monitor, mtx, new_mtx, dist, args.distance, args.num_captures)
 
     init_directories()
-    (listener, generator_client) = init_network()
+    (listener, generator_client) = init_network(args)
     calibrator.log('connected to generator')
 
     conn = listener.accept()
@@ -273,7 +273,7 @@ if __name__ == '__main__':
                     if type(calibrator) == LensCalibrator:
                         (mtx, new_mtx, dist) = calibrator.calibrate_lens()
                         if args.mode == 'full':
-                            calibrator = NodalOffsetCalibrator(mtx, new_mtx, dist, args.distance, args.num_captures)
+                            calibrator = NodalOffsetCalibrator(monitor, mtx, new_mtx, dist, args.distance, args.num_captures)
                             sync_rngs(calibrator.gen.random, generator_client)
                         else:
                             break

@@ -17,7 +17,7 @@ CHECKERBOARD = cv2.cvtColor(CHECKERBOARD, cv2.COLOR_RGB2RGBA)
 
 def init_window(monitor):
     cv2.namedWindow('window', cv2.WND_PROP_FULLSCREEN)
-    cv2.moveWindow('window', -monitor.width, 0)
+    cv2.moveWindow('window', monitor.x, monitor.y)
     cv2.setWindowProperty('window', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
 
@@ -96,26 +96,30 @@ class ImageGenerator():
 if __name__ == '__main__':
     listener_port = None
     client_port = None
+    monitor_id = 0
 
-    opts, args = getopt(sys.argv[1:], '', ['listener-port=', 'client-port='])
+    opts, args = getopt(sys.argv[1:], '', ['listener-port=', 'client-port=', 'monitor='])
     for opt, arg in opts:
         if opt == '--listener-port':
             listener_port = int(arg)
         elif opt == '--client-port':
             client_port = int(arg)
+        elif opt == '--monitor':
+            monitor_id = int(arg)
 
     assert listener_port is not None
     assert client_port is not None
 
     listener = Listener(('localhost', listener_port), authkey=b'password')
 
-    monitor = get_monitors()[0]
+    monitor = get_monitors()[monitor_id]
     gen = ImageGenerator(monitor)
 
     init_window(monitor)
 
     conn = listener.accept()
     camera_client = Client(('localhost', client_port), authkey=b'password')
+    gen.log('connected to camera driver')
 
     try:
         while True:

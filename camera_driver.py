@@ -40,6 +40,7 @@ if __name__ == '__main__':
 
     conn = listener.accept()
     calibrator_client = Client(('localhost', client_port), authkey=b'password')
+    driver.log('connected to calibrator')
     
     try:
         while True:
@@ -63,3 +64,5 @@ if __name__ == '__main__':
         listener.close()
         conn.close()
         calibrator_client.close()
+        
+        driver.cam.release()
