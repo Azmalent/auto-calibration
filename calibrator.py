@@ -10,19 +10,9 @@ import numpy as np
 import os
 import subprocess
 
-MATPLOTLIB_INSTALLED = None
-
-#TODO matplotlib integration
-try:
-    import matplotlib.pyplot as plt
-    MATPLOTLIB_INSTALLED = True
-except ImportError:
-    MATPLOTLIB_INSTALLED = False
-
-
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
-SQUARE_SIZE = 67.3 # After translating by 750 mm
+SQUARE_SIZE = 128
 BOARD_SIZE = (8, 6)
 
 CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
@@ -164,7 +154,9 @@ class NodalOffsetCalibrator(AbstractCalibrator):
     def __init__(self, monitor, mtx, distortion, cam_dist, num_captures):
         super().__init__(monitor, num_captures)
 
-        self.objpoints *= SQUARE_SIZE
+        square_size_mm = SQUARE_SIZE * monitor.width_mm / monitor.width
+        pixels_per_mm = mtx[0][0] / 750
+        self.objpoints *= square_size_mm * pixels_per_mm
         
         self.matrix = mtx
         self.distortion = distortion
