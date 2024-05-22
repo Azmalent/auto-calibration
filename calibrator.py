@@ -12,6 +12,7 @@ import subprocess
 
 MATPLOTLIB_INSTALLED = None
 
+#TODO matplotlib integration
 try:
     import matplotlib.pyplot as plt
     MATPLOTLIB_INSTALLED = True
@@ -168,8 +169,9 @@ class NodalOffsetCalibrator(AbstractCalibrator):
         self.matrix = mtx
         self.distortion = distortion
 
-        # TODO: pass original image along with camera image through sockets???
         self.gen = ImageGenerator(self.monitor)
+        self.gen.randomize_dz = False
+
         self.vcam = VirtualCamera(self.monitor, mtx, cam_dist)
         self.v_imgpoints = []
 

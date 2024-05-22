@@ -29,6 +29,7 @@ class ImageGenerator():
         self.monitor = monitor
         
         self.random = Random()
+        self.randomize_dz = True
         
         w, h = monitor.width, monitor.height
         f = np.sqrt(w**2 + h**2)
@@ -39,9 +40,6 @@ class ImageGenerator():
         ])
 
         self.proj_3d = proj_matrix_3d(CHECKERBOARD.shape[1], CHECKERBOARD.shape[0])
-
-        self.pixels_per_mm = monitor.width / monitor.width_mm
-        self.trans = translation_matrix_3d(0, 0, 750 * self.pixels_per_mm)
 
 
     def log(self, message):
@@ -70,8 +68,9 @@ class ImageGenerator():
         if self.random.random() > 0.5:
             rot = rot @ rotation_matrix(0, 0, np.radians(90))
 
-        # TODO: flag to control dz randomization
-        trans = translation_matrix_3d(0, 0, self.random.uniform(500, 1000) * self.pixels_per_mm)
+        dz = self.random.uniform(750, 1000) if self.randomize_dz else 750
+        pixels_per_mm = self.monitor.width / self.monitor.width_mm
+        trans = translation_matrix_3d(0, 0, dz * pixels_per_mm)
 
         mat = self.camera_matrix @ trans @ rot @ self.proj_3d
 
@@ -159,6 +158,7 @@ if __name__ == '__main__':
                     camera_client.send('capture')
                 elif command == 'set_seed':
                     gen.random.seed(args[0])
+                    gen.randomize_dz = False # no dz randomization when we're calibrating nodal offset!
                 elif command == 'exit':
                     gen.log('received exit message')
                     break

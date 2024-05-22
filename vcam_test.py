@@ -4,9 +4,13 @@ from vcam import VirtualCamera
 import cv2
 import numpy as np
 
-monitor = get_monitors()[0]
+monitor = get_monitors()[1]
+dist_mm = 190
+print('Distance in pixels: ', dist_mm * monitor.width / monitor.width_mm)
+
 mtx = np.loadtxt('output/camera_matrix.txt')
-vcam = VirtualCamera(monitor, mtx, 382)
+vcam = VirtualCamera(monitor, mtx, dist_mm)
+vcam.dz = 2.069155660396600069e+03
 
 objpts = np.zeros((BOARD_SIZE[0] * BOARD_SIZE[1], 3), np.float32)
 objpts[:,:2] = np.mgrid[0:BOARD_SIZE[0], 0:BOARD_SIZE[1]].T.reshape(-1,2) * SQUARE_SIZE
@@ -45,8 +49,9 @@ for i in range(n):
 
 (w, h) = monitor.width, monitor.height
 
+dist = np.loadtxt('output/distortion.txt')
 no_dist = np.zeros((5, 1))
-rms, _, _, _, _, R, T, _, _ = cv2.stereoCalibrate([objpts] * n, v_imgpts, p_imgpts, mtx, no_dist, mtx, no_dist, (w, h), flags=cv2.CALIB_FIX_INTRINSIC+cv2.CALIB_FIX_K3)
+rms, _, _, _, _, R, T, _, _ = cv2.stereoCalibrate([objpts] * n, v_imgpts, p_imgpts, mtx, no_dist, mtx, dist, (w, h), flags=cv2.CALIB_FIX_INTRINSIC+cv2.CALIB_FIX_K3)
 print(rms)
 
 np.savetxt('output/nodal_offset_rotation.txt', R)
