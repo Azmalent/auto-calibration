@@ -40,8 +40,8 @@ class ImageGenerator():
 
         self.proj_3d = proj_matrix_3d(CHECKERBOARD.shape[1], CHECKERBOARD.shape[0])
 
-        pixels_per_mm = monitor.width / monitor.width_mm
-        self.trans = translation_matrix_3d(0, 0, 1000 * pixels_per_mm)
+        self.pixels_per_mm = monitor.width / monitor.width_mm
+        self.trans = translation_matrix_3d(0, 0, 750 * self.pixels_per_mm)
 
 
     def log(self, message):
@@ -49,9 +49,7 @@ class ImageGenerator():
 
 
     def next(self): 
-        """
-        Generates the next image.
-        """
+        """Generate the next image."""
         mat = self.random_matrix()
         return cv2.warpPerspective(CHECKERBOARD, mat, (self.monitor.width, self.monitor.height), borderMode=cv2.BORDER_CONSTANT, borderValue=ImageGenerator.BACKGROUND_COLOR)
 
@@ -59,12 +57,23 @@ class ImageGenerator():
     # For lens calibration
     # Random 3D rotation + random 2D offset
     def random_matrix(self):
-        rx = self.random_angle(ImageGenerator.MAX_ANGLE)
-        ry = self.random_angle(ImageGenerator.MAX_ANGLE)
-        rz = self.random_angle(180)
-        rot = rotation_matrix(rx, ry, rz)
+        """Generate random 3D rotation and random 2D offset"""
+        degrees = self.random.uniform(40, 50)
+        axis = self.random_unit_vector()
 
-        mat = self.camera_matrix @ self.trans @ rot @ self.proj_3d
+        #rx = self.random_angle(ImageGenerator.MAX_ANGLE)
+        #ry = self.random_angle(ImageGenerator.MAX_ANGLE)
+        #rz = self.random_angle(180)
+        #rot = rotation_matrix(rx, ry, rz)
+        rot = rotation_matrix_from_axis(axis, np.radians(degrees))
+
+        if self.random.random() > 0.5:
+            rot = rot @ rotation_matrix(0, 0, np.radians(90))
+
+        # TODO: flag to control dz randomization
+        trans = translation_matrix_3d(0, 0, self.random.uniform(500, 1000) * self.pixels_per_mm)
+
+        mat = self.camera_matrix @ trans @ rot @ self.proj_3d
 
         (dx, dy) = self.random_offsets(mat)
         offset_2d = translation_matrix_2d(dx, dy)
@@ -72,11 +81,24 @@ class ImageGenerator():
         return offset_2d @ mat
 
 
+
     def random_angle(self, max_degrees):
         """Generate random angle in range [-max_degrees, max_degrees]"""
         degrees = self.random.uniform(-max_degrees, max_degrees)
         return radians(degrees)
+    
+    def random_unit_vector(self):
+        """Generate random unit vector"""
+        phi = self.random.uniform(0, np.pi * 2)
+        costheta = self.random.uniform(-1, 1)
 
+        theta = np.arccos(costheta)
+        x = np.sin(theta) * np.cos(phi)
+        y = np.sin(theta) * np.sin(phi)
+        z = np.cos(theta)
+
+        return (x, y, z)
+    
 
     def random_offsets(self, mat):
         """Generate random offsets for the checkerboard"""
@@ -88,8 +110,10 @@ class ImageGenerator():
         dy_min = int(-top)
         dy_max = int(self.monitor.height - bottom)
 
-        dx = self.random.uniform(dx_min, dx_max)
-        dy = self.random.uniform(dy_min, dy_max)   
+        #TODO fix error
+        dx = max([self.random.uniform(dx_min, dx_max) for _ in range(1)], key=abs)
+        dy = max([self.random.uniform(dy_min, dy_max) for _ in range(1)], key=abs)
+
         return (dx, dy)
 
 

@@ -14,9 +14,9 @@ SQUARE_SIZE_PIXELS = SQUARE_SIZE_MM * PIXELS_PER_MM
 
 BOARD_SIZE = (8, 6)
 objpoints = np.zeros((BOARD_SIZE[0] * BOARD_SIZE[1], 3), np.float32)
-objpoints[:,:2] = np.mgrid[0:BOARD_SIZE[0], 0:BOARD_SIZE[1]].T.reshape(-1,2) * SQUARE_SIZE_PIXELS
+objpoints[:,:2] = np.mgrid[0:BOARD_SIZE[0], 0:BOARD_SIZE[1]].T.reshape(-1,2)
 
-captures = sorted( glob('captures/*.jpg') )
+captures = sorted( glob('captures2/*.jpg') )
 
 filenames = []
 images = []
@@ -31,17 +31,17 @@ for i in range(len(captures)):
 
     if ret:
         corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1,-1), (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001))
+        img_corners = cv2.drawChessboardCorners(img, BOARD_SIZE, corners, ret)
         
         filenames.append(filename)
         imgpoints.append(corners)
-        images.append(img)
     else:
         print('Failed to find corners in file ' + filename + '. Deleting')
         os.remove(filename)
 
-n = len(images)
-h, w = images[0].shape[:2]
-rms, mtx, dist, rvecs, tvecs = cv2.calibrateCamera([objpoints] * n, imgpoints, (w, h), None, None)
+
+n = len(imgpoints)
+rms, mtx, dist, rvecs, tvecs = cv2.calibrateCamera([objpoints] * n, imgpoints, (1920, 1080), None, None)
 
 print('RMS: ' + str(rms))
 np.savetxt('camera_matrix.txt', mtx)
@@ -64,3 +64,25 @@ for i in range( len(errors) ):
         filename = filenames[i]
         print('Error too high in file ' + filename + ' (' + str(err) + '). Deleting')
         os.remove(filename)
+
+# Plot
+import matplotlib.axes as axes
+import matplotlib.pyplot as plt
+
+xs = []
+ys = []
+
+for img in imgpoints:
+    for p in img:
+        x, y = p[0]
+        xs.append(x)
+        ys.append(y)
+
+
+plt.scatter(xs, ys, color='red')
+plt.xlim(0, 1920)
+plt.ylim(0, 1080)
+plt.xlabel('x')
+plt.ylabel('y', rotation=0)
+
+plt.show()

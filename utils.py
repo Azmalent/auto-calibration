@@ -45,7 +45,7 @@ def proj_matrix_3d(width, height):
     """2D -> 3D projection matrix"""
     return np.array([   [1, 0, -width / 2],
                         [0, 1, -height / 2],
-                        [0, 0, 0],
+                        [0, 0, 1],
                         [0, 0, 1]])
 
 
@@ -67,6 +67,17 @@ def rotation_matrix(rx, ry, rz):
                     [0, 0, 0, 1]])
 
     return RX.dot(RY).dot(RZ)
+
+
+def rotation_matrix_from_axis(axis, angle):
+    """Rotation matrix from axis and angle"""
+    x, y, z = axis
+    return np.array([
+        [np.cos(angle) + x**2 * (1 - np.cos(angle)), x * y * (1 - np.cos(angle)) - z * np.sin(angle), x * z * (1 - np.cos(angle)) + y * np.sin(angle), 0],
+        [y * x * (1 - np.cos(angle)) + z * np.sin(angle), np.cos(angle) + y**2 * (1 - np.cos(angle)), y * z * (1 - np.cos(angle)) - x * np.sin(angle), 0],
+        [z * x * (1 - np.cos(angle)) - y * np.sin(angle), z * y * (1 - np.cos(angle)) + x * np.sin(angle), np.cos(angle) + z**2 * (1 - np.cos(angle)), 0],
+        [0, 0, 0, 1]
+    ])
 
 
 def translation_matrix_2d(dx, dy):

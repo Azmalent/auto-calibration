@@ -10,14 +10,21 @@ import numpy as np
 import os
 import subprocess
 
+MATPLOTLIB_INSTALLED = None
+
+try:
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_INSTALLED = True
+except ImportError:
+    MATPLOTLIB_INSTALLED = False
+
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
-# The size of a square projection after translating by 1 meter
-SQUARE_SIZE = 50.5
+SQUARE_SIZE = 67.3 # After translating by 750 mm
 BOARD_SIZE = (8, 6)
 
-CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
+CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 
 
 def parse_args():
@@ -77,21 +84,26 @@ class AbstractCalibrator():
         self.imgpoints = []
 
         self.objpoints = np.zeros((BOARD_SIZE[0] * BOARD_SIZE[1], 3), np.float32)
-        self.objpoints[:,:2] = np.mgrid[0:BOARD_SIZE[0], 0:BOARD_SIZE[1]].T.reshape(-1,2) * SQUARE_SIZE
+        self.objpoints[:,:2] = np.mgrid[0:BOARD_SIZE[0], 0:BOARD_SIZE[1]].T.reshape(-1,2)
 
         self.num_captures = 0
         self.required_num_captures = num_snapshots
         
+
     def is_done(self):
         return self.num_captures >= self.required_num_captures
 
 
 class LensCalibrator(AbstractCalibrator):
+    def __init__(self, monitor, num_snapshots):
+        super().__init__(monitor, num_snapshots)
+
+
     def log(self, message):
         print('[Lens Calibrator] ' + message)
     
 
-    def accept_image(self, img):      
+    def accept_image(self, img):
         self.log('accepting image #' + str(self.num_captures + 1))
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -106,6 +118,7 @@ class LensCalibrator(AbstractCalibrator):
             self.num_captures += 1
         else:
             self.log('failed to find corners')
+
 
     def calibrate_lens(self):
         img = cv2.imread('captures/lens/capture' + str(self.num_captures - 1) + '.png')
@@ -122,6 +135,7 @@ class LensCalibrator(AbstractCalibrator):
         for i in range(n):
             imgpoints2, _ = cv2.projectPoints(self.objpoints, rvecs[i], tvecs[i], mtx, dist)
             errors.append(cv2.norm(self.imgpoints[i], imgpoints2, cv2.NORM_L2) / len(imgpoints2))
+            print(imgpoints2)
 
         mean_error = sum(errors) / n
         print("total error: {}".format(mean_error))
@@ -142,15 +156,16 @@ class LensCalibrator(AbstractCalibrator):
         
         self.log('calibration complete!')
 
-        return (mtx, new_mtx, dist)
+        return (mtx, dist)
 
 
 class NodalOffsetCalibrator(AbstractCalibrator):
-    def __init__(self, monitor, mtx, new_mtx, distortion, cam_dist, num_captures):
+    def __init__(self, monitor, mtx, distortion, cam_dist, num_captures):
         super().__init__(monitor, num_captures)
 
+        self.objpoints *= SQUARE_SIZE
+        
         self.matrix = mtx
-        self.new_matrix = new_mtx
         self.distortion = distortion
 
         # TODO: pass original image along with camera image through sockets???
@@ -163,11 +178,10 @@ class NodalOffsetCalibrator(AbstractCalibrator):
         print('[Nodal Offset Calibrator] ' + message)
 
 
-    def accept_image(self, img):
+    def accept_image(self, physical_img):
         self.log('accepting image #' + str(self.num_captures + 1))
 
         original_img = self.gen.next()
-        physical_img = cv2.undistort(img, self.matrix, self.distortion, None, self.new_matrix)
         virtual_img = self.vcam.capture(original_img)
         
         cv2.imwrite('captures/nodal_offset/capture' + str(self.num_captures) + '_original.png', original_img)
@@ -195,7 +209,7 @@ class NodalOffsetCalibrator(AbstractCalibrator):
         (w, h) = self.monitor.width, self.monitor.height
 
         no_distortion = np.zeros((5, 1))
-        rmse, _, _, _, _, R, T, _, _ = cv2.stereoCalibrate([self.objpoints] * n, self.v_imgpoints, self.imgpoints, self.matrix, no_distortion, self.matrix, no_distortion, (w, h), flags=cv2.CALIB_FIX_INTRINSIC)
+        rmse, _, _, _, _, R, T, _, _ = cv2.stereoCalibrate([self.objpoints] * n, self.v_imgpoints, self.imgpoints, self.matrix, no_distortion, self.matrix, self.distortion, (w, h), flags=cv2.CALIB_FIX_INTRINSIC)
 
         np.savetxt('output/nodal_offset_rotation.txt', R)
         np.savetxt('output/nodal_offset_translation.txt', T)
@@ -242,15 +256,14 @@ if __name__ == '__main__':
     monitor = get_monitors()[args.monitor]
     
     calibrator = None
-    (mtx, new_mtx, dist) = None, None, None
+    (mtx, dist) = None, None
 
     if args.mode != 'extrinsic':
         calibrator = LensCalibrator(monitor, args.num_captures)
     else:
         mtx = np.loadtxt('output/camera_matrix.txt')
-        new_mtx = np.loadtxt('output/optimal_camera_matrix.txt')
         dist = np.loadtxt('output/distortion.txt')
-        calibrator = NodalOffsetCalibrator(monitor, mtx, new_mtx, dist, args.distance, args.num_captures)
+        calibrator = NodalOffsetCalibrator(monitor, mtx, dist, args.distance, args.num_captures)
 
     init_directories()
     (listener, generator_client) = init_network(args)
@@ -271,9 +284,9 @@ if __name__ == '__main__':
 
                 if calibrator.is_done():
                     if type(calibrator) == LensCalibrator:
-                        (mtx, new_mtx, dist) = calibrator.calibrate_lens()
+                        (mtx, dist) = calibrator.calibrate_lens()
                         if args.mode == 'full':
-                            calibrator = NodalOffsetCalibrator(monitor, mtx, new_mtx, dist, args.distance, args.num_captures)
+                            calibrator = NodalOffsetCalibrator(monitor, mtx, dist, args.distance, args.num_captures)
                             sync_rngs(calibrator.gen.random, generator_client)
                         else:
                             break

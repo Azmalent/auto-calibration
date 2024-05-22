@@ -6,7 +6,7 @@ import numpy as np
 
 monitor = get_monitors()[0]
 mtx = np.loadtxt('output/camera_matrix.txt')
-vcam = VirtualCamera(monitor, mtx, 220)
+vcam = VirtualCamera(monitor, mtx, 382)
 
 objpts = np.zeros((BOARD_SIZE[0] * BOARD_SIZE[1], 3), np.float32)
 objpts[:,:2] = np.mgrid[0:BOARD_SIZE[0], 0:BOARD_SIZE[1]].T.reshape(-1,2) * SQUARE_SIZE
