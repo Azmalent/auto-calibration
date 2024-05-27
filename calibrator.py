@@ -1,4 +1,5 @@
 from datetime import datetime
+import math
 from generator import ImageGenerator
 from multiprocessing.connection import Client, Listener
 from screeninfo import get_monitors
@@ -155,7 +156,9 @@ class NodalOffsetCalibrator(AbstractCalibrator):
         super().__init__(monitor, num_captures)
 
         square_size_mm = SQUARE_SIZE * monitor.width_mm / monitor.width
-        pixels_per_mm = mtx[0][0] / 750
+
+        f = math.sqrt(monitor.width**2 + monitor.height**2)
+        pixels_per_mm = f / 750
         self.objpoints *= square_size_mm * pixels_per_mm
         
         self.matrix = mtx

@@ -56,7 +56,7 @@ class ImageGenerator():
     # Random 3D rotation + random 2D offset
     def random_matrix(self):
         """Generate random 3D rotation and random 2D offset"""
-        degrees = self.random.uniform(40, 50)
+        degrees = self.random.uniform(0, 50)
         axis = self.random_unit_vector()
 
         #rx = self.random_angle(ImageGenerator.MAX_ANGLE)
@@ -86,6 +86,7 @@ class ImageGenerator():
         degrees = self.random.uniform(-max_degrees, max_degrees)
         return radians(degrees)
     
+
     def random_unit_vector(self):
         """Generate random unit vector"""
         phi = self.random.uniform(0, np.pi * 2)
@@ -109,7 +110,6 @@ class ImageGenerator():
         dy_min = int(-top)
         dy_max = int(self.monitor.height - bottom)
 
-        #TODO fix error
         dx = max([self.random.uniform(dx_min, dx_max) for _ in range(1)], key=abs)
         dy = max([self.random.uniform(dy_min, dy_max) for _ in range(1)], key=abs)
 
